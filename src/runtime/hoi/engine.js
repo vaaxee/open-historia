@@ -122,15 +122,28 @@ export const normalizeNation = (nation) => {
 };
 
 // Active la couche sur une partie : world.hoi est créé avec les nations fournies.
-export const enableHoiLayer = (world, { startDate, nations = {} } = {}) => ({
+// `series` : la série de valeurs de départ utilisée (presets.js), pour l'affichage.
+export const enableHoiLayer = (world, { startDate, nations = {}, series = null } = {}) => ({
   ...(isObject(world) ? world : {}),
   hoi: {
     version: HOI_VERSION,
     lastDate: startDate ? String(startDate) : null,
     lastReport: null,
+    series: series ? String(series) : null,
     nations: Object.fromEntries(Object.entries(nations).map(([key, value]) => [key, normalizeNation(value)])),
   },
 });
+
+// La clé de world.hoi.nations qui désigne `polity`, sans tenir compte de la casse
+// ni des espaces autour : l'IA écrit « germany » ou « Germany » pour la même nation.
+export const findNationKey = (hoi, polity) => {
+  const nations = isObject(hoi?.nations) ? hoi.nations : {};
+  const wanted = String(polity ?? "").trim();
+  if (!wanted) return null;
+  if (Object.prototype.hasOwnProperty.call(nations, wanted)) return wanted;
+  const lower = wanted.toLowerCase();
+  return Object.keys(nations).find((key) => key.toLowerCase() === lower) ?? null;
+};
 
 // ---------------------------------------------------------------------------
 // Calcul
@@ -262,25 +275,67 @@ export const advanceHoiLayer = (world, { fromDate, toDate } = {}) => {
   };
 };
 
-// Petite aide locale : date + n jours, ou la date d'origine si le calcul échoue.
-const addDaysSafe = (date, days) => addGameDays(date, days) ?? date;
+// Petite aide locale : date + n jours, ou la date d'origine si le calcul échoue
+// (addGameDays renvoie alors "", pas null).
+const addDaysSafe = (date, days) => addGameDays(date, days) || date;
 
 // ---------------------------------------------------------------------------
 // Texte pour le prompt (branché en phase 1)
 // ---------------------------------------------------------------------------
 
-export const buildEconomyPromptBlock = (world, polity) => {
-  const nation = world?.hoi?.nations?.[polity];
-  if (!nation) return "";
-  const report = world.hoi.lastReport?.nations?.[polity];
-  const lines = [`[ÉCONOMIE — ${polity}]`];
+// Une ligne par autre puissance : usines, pénuries du dernier saut. Les plus
+// industrielles d'abord, bornées à `limit` pour ne pas gonfler le prompt.
+const buildOtherNationsLines = (world, playerKey, limit) => {
+  const nations = world.hoi.nations;
+  const reports = world.hoi.lastReport?.nations ?? {};
+  return Object.entries(nations)
+    .filter(([key]) => key !== playerKey)
+    .map(([key, nation]) => ({
+      key,
+      nation,
+      weight: num(nation?.factories?.civilian) + num(nation?.factories?.military),
+    }))
+    .sort((a, b) => b.weight - a.weight || a.key.localeCompare(b.key))
+    .slice(0, limit)
+    .map(({ key, nation }) => {
+      const shortages = Object.keys(reports[key]?.shortages ?? {});
+      const lines = (Array.isArray(nation.lines) ? nation.lines : [])
+        .filter((entry) => entry.factories > 0)
+        .map((entry) => `${entry.equipment} ${entry.factories}`)
+        .join(", ");
+      return `- ${key} : ${num(nation.factories?.civilian)} civiles / ${num(nation.factories?.military)} militaires`
+        + (lines ? ` (lignes : ${lines})` : "")
+        + (shortages.length ? ` — pénurie de ${shortages.join(", ")}` : "")
+        + ".";
+    });
+};
+
+// `others` : nombre d'autres puissances résumées en une ligne (0 = aucune).
+export const buildEconomyPromptBlock = (world, polity, { others = 0 } = {}) => {
+  const key = findNationKey(world?.hoi, polity);
+  if (!key) return "";
+  const nation = world.hoi.nations[key];
+  const report = world.hoi.lastReport?.nations?.[key];
+  const lines = [`[ÉCONOMIE — ${key}]`];
   lines.push(`Stocks : ${Object.entries(nation.stocks).map(([k, v]) => `${k} ${v}`).join(", ") || "aucun"}.`);
   lines.push(`Usines : ${nation.factories.civilian} civiles, ${nation.factories.military} militaires.`);
+  const production = (Array.isArray(nation.lines) ? nation.lines : [])
+    .map((entry) => `${entry.equipment} [id ${entry.id}] ${entry.factories} usines, efficacité ${Math.round(entry.efficiency * 100)} %`)
+    .join(" ; ");
+  if (production) lines.push(`Lignes : ${production}.`);
+  const modifiers = (Array.isArray(nation.modifiers) ? nation.modifiers : [])
+    .map((m) => `${m.label || m.id} ${m.value > 0 ? "+" : ""}${Math.round(m.value * 100)} %${m.untilDate ? ` jusqu'au ${m.untilDate}` : ""}`)
+    .join(", ");
+  if (modifiers) lines.push(`Modificateurs actifs : ${modifiers}.`);
   if (report) {
     const produced = Object.entries(report.produced).map(([k, v]) => `${v} ${k}`).join(", ");
     const short = Object.entries(report.shortages).map(([k, v]) => `${k} (manque ${v})`).join(", ");
     lines.push(`Dernier saut (${report.days} j) : production ${produced || "nulle"}.`);
     if (short) lines.push(`Pénuries : ${short}. Le récit doit en tenir compte.`);
+  }
+  if (others > 0) {
+    const rest = buildOtherNationsLines(world, key, others);
+    if (rest.length) lines.push("Autres puissances :", ...rest);
   }
   return lines.join("\n");
 };
