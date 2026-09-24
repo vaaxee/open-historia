@@ -809,6 +809,31 @@ const projectOpSchema = {
   additionalProperties: false,
 };
 
+// Couche HOI4 (runtime/hoi/economyOps.js). Flat on purpose, like projectOpSchema:
+// one shape with the fields each op reads. Offered to the model only when the
+// game has an economy layer (withoutEconomyOps strips it otherwise), but always
+// accepted by validation — applying one to a game without the layer is a no-op
+// the receipt reports.
+const economyOpSchema = {
+  type: "object",
+  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories.",
+  properties: {
+    op: { type: "string", enum: ["modifier", "stock", "line"] },
+    polity: textSchema("Country name as in [ÉCONOMIE]."),
+    value: { type: "number", description: "modifier: -0.5 to 0.5." },
+    days: { type: "number", description: "modifier: 1-365, default 30." },
+    label: textSchema("modifier: its cause; same label replaces."),
+    resource: textSchema("stock: resource name."),
+    amount: { type: "number", description: "stock: + added, - removed." },
+    lineId: textSchema("line: id from [ÉCONOMIE]."),
+    equipment: textSchema("line: equipment, to find or open a line."),
+    factories: { type: "number", description: "line: new factory total." },
+    reason: textSchema("What in the event causes it."),
+  },
+  required: ["op", "polity"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -878,6 +903,11 @@ const impactsSchema = {
         + "operation, a sustained political campaign - so the board matches the "
         + "story. Prefer updating a running project over starting a duplicate.",
       items: projectOpSchema,
+    },
+    economyOps: {
+      type: "array",
+      description: "Bounded economy changes this event causes. See [Economy Layer].",
+      items: economyOpSchema,
     },
   },
   additionalProperties: false,
@@ -2741,6 +2771,29 @@ export const GAMEPLAY_TOOLS = Object.freeze({
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
 
+// A game without the HOI4 economy layer must be asked for exactly what it was
+// asked for before the layer existed: this clone drops every impacts.economyOps
+// the tool advertises. Validation keeps the static schema, which accepts the
+// field either way — only what the model is OFFERED changes.
+export const withoutEconomyOps = (tool) => {
+  if (!tool?.schema) return tool;
+  let changed = false;
+  const strip = (value) => {
+    if (Array.isArray(value)) return value.map(strip);
+    if (!value || typeof value !== "object") return value;
+    const out = Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, strip(entry)]));
+    // An impacts object — the full one or the jump's — is the one with unitOps.
+    if (out.properties?.economyOps && out.properties?.unitOps) {
+      const { economyOps, ...rest } = out.properties;
+      out.properties = rest;
+      changed = true;
+    }
+    return out;
+  };
+  const schema = strip(tool.schema);
+  return changed ? { ...tool, schema } : tool;
+};
+
 const STOCK_STAT_INDEX_KEYS = new Set([
   "sovereignty",
   "foodAutonomy",
@@ -3201,6 +3254,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "unitOps",
   "markerOps",
   "projectOps",
+  "economyOps",
 ];
 
 const flattenImpactWrappers = (value) => {
@@ -3250,6 +3304,7 @@ const normalizeEventShape = (entry) => {
       spyOps: ["spies", "spyOperations", "espionageOps", "agentOps"],
       createdChats: ["chats", "diplomaticChats"],
       projectOps: ["projects", "projectOperations"],
+      economyOps: ["economy", "economicOps", "economyOperations"],
     };
     for (const [field, fieldAliases] of Object.entries(impactAliases)) {
       const aliasValue = firstDefinedKey(impacts, fieldAliases);

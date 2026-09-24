@@ -542,6 +542,8 @@ const hardImpactKeysForEvent = (event) => {
     "unitOps",
     "markerOps",
     "createdChats",
+    // Couche HOI4 : une grève ou un sabotage change des chiffres réels.
+    "economyOps",
   ]) {
     if (normalizeArray(impacts[key]).length) keys.push(key);
   }

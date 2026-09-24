@@ -15,6 +15,7 @@ import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeSpyOp } from "./spycraft.js";
+import { normalizeEconomyOp } from "./hoi/economyOps.js";
 import { normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
@@ -2811,6 +2812,7 @@ const normalizeEventImpacts = (value) => {
     return {
       actionIds: [],
       createdChats: [],
+      economyOps: [],
       markerOps: [],
       polityChanges: [],
       projectOps: [],
@@ -2826,6 +2828,9 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    // Couche HOI4 (runtime/hoi/economyOps.js) : la forme seule. Appliquées dans
+    // applySimulationResult, avant que le moteur fasse avancer la production.
+    economyOps: normalizeArray(value.economyOps).map(normalizeEconomyOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),

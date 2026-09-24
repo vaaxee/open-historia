@@ -45,6 +45,7 @@ const APPLIED_KEYS = Object.freeze([
   "unitOps",
   "markerOps",
   "projectOps",
+  "economyOps",
   "createdChats",
   "reports",
 ]);
@@ -58,6 +59,7 @@ const APPLIED_LABELS = Object.freeze({
   unitOps: ["unit operation", "unit operations"],
   markerOps: ["structure operation", "structure operations"],
   projectOps: ["project operation", "project operations"],
+  economyOps: ["economy operation", "economy operations"],
   createdChats: ["new chat", "new chats"],
   reports: ["report", "reports"],
 });

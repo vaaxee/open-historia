@@ -92,6 +92,8 @@ const structuredImpactReasons = (event) => {
     "unitOps",
     "markerOps",
     "createdChats",
+    // Couche HOI4 : une grève ou un sabotage change des chiffres réels.
+    "economyOps",
   ]) {
     if (asArray(impacts[key]).length) result.push(key);
   }

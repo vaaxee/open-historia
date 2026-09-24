@@ -19,6 +19,7 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
+import { buildEconomyPromptBlock } from "../../runtime/hoi/engine.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -1982,6 +1983,11 @@ export const buildPromptContext = async (bundle, {
   }
   if (wants("projectsSummary")) {
     result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game);
+  }
+  // Couche HOI4 : "" pour une partie sans world.hoi, et gameplay.js n'ajoute alors
+  // ni le bloc [ÉCONOMIE] ni economyOps à l'outil du tour.
+  if (wants("economySummary")) {
+    result.economySummary = buildEconomyPromptBlock(bundle.world, normalizeString(bundle.game?.country), { others: 8 });
   }
 
   const worldBeforeRoundOne =

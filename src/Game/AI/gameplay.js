@@ -15,6 +15,7 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { advanceHoiLayer } from "../../runtime/hoi/engine.js";
+import { applyEconomyOpsFromEvents } from "../../runtime/hoi/economyOps.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
@@ -76,6 +77,7 @@ import {
   getGameplayToolForStatIndices,
   normalizeGameplayPayload,
   validateGameplayPayload,
+  withoutEconomyOps,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -2209,6 +2211,16 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     }
   }
 
+  // Couche HOI4 (runtime/hoi/) : l'IA raconte, le moteur compte. Le bloc n'existe
+  // que pour une partie qui a world.hoi, et c'est aussi ce qui ouvre economyOps
+  // dans l'outil du tour (runJsonTask) : une partie ordinaire ne voit ni l'un ni l'autre.
+  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    const economy = normalizeString(variables.economySummary);
+    if (economy) {
+      systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\n${economy}`;
+    }
+  }
+
   // The unit contract itself. defaultPrompts.json carries the same rules for NEW
   // games; this is what reaches the campaigns that already exist, whose prompts are
   // frozen — the same reason [Player Agency] and [Map Truth] are injected here.
@@ -2746,13 +2758,20 @@ const runJsonTask = async (taskKey, {
 }) => {
   const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups });
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
+  // Couche HOI4 : economyOps n'est proposé au modèle que si le tour a un bloc
+  // [ÉCONOMIE] — une partie ordinaire reçoit exactement l'outil d'avant.
+  const offersEconomyOps = Boolean(normalizeString(variables?.economySummary));
+  const resolveTaskTool = () => {
+    const tool = customFullStatSheet
+      ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
+      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+    return offersEconomyOps ? tool : withoutEconomyOps(tool);
+  };
 
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
   if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
-    const batchTool = customFullStatSheet
-      ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+    const batchTool = resolveTaskTool();
     if (batchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
@@ -2790,9 +2809,7 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const tool = customFullStatSheet
-    ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+  const tool = resolveTaskTool();
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
   // shapes, never the prompt itself: a jump's system prompt is tens of thousands
@@ -3589,7 +3606,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
   "regionTransfers", "regionClaims", "regionControlOps", "polityChanges",
-  "createdChats", "unitOps", "markerOps", "spyOps", "actionIds",
+  "createdChats", "unitOps", "markerOps", "spyOps", "actionIds", "economyOps",
 ];
 const eventCarriesOwnConsequence = (event) =>
   OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
@@ -6584,6 +6601,14 @@ const applySimulationResult = async ({
   // is left is what the world is about to receive.
   tallyAppliedEvents(receipt, freshEvents);
 
+  // Couche HOI4 : les economyOps du tour (grèves, contrats, sabotages) s'appliquent
+  // à world.hoi AVANT que le moteur fasse avancer la production (advanceHoiLayer,
+  // plus bas), pour peser dès ce tour. Ici et pas après la fusion : le reçu est
+  // recopié dans simulationHistory par applyEventImpactsToWorld, et une note écrite
+  // ensuite n'y arriverait pas. Sans world.hoi, rien ne change.
+  const economyOps = applyEconomyOpsFromEvents(baseWorld.hoi, freshEvents, { date: baseGame.gameDate });
+  for (const note of economyOps.notes) noteReceipt(receipt, note.kind, note.text);
+
   const impactMerge = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
@@ -6595,6 +6620,7 @@ const applySimulationResult = async ({
     motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
     world: {
       ...baseWorld,
+      ...(economyOps.hoi ? { hoi: economyOps.hoi } : {}),
       // Whatever comes through here ends a scene: a skip is refused while one is
       // in progress and clears a leftover one, and a scene resolving is this.
       activeInteractive: null,
@@ -8352,7 +8378,8 @@ const runWorldBreadthRepair = async ({
       userMessage,
       signal,
       taskKey: "worldBreadthRepair",
-      tool: getGameplayTool("jumpForward"),
+      // This pass sees no [ÉCONOMIE] block, so it is never offered economyOps.
+      tool: withoutEconomyOps(getGameplayTool("jumpForward")),
     });
 
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
