@@ -14,6 +14,7 @@ import {
   tallyAppliedEvents,
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
+import { advanceHoiLayer } from "../../runtime/hoi/engine.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
@@ -6630,6 +6631,11 @@ const applySimulationResult = async ({
   });
   const nextColors = impactMerge.colors;
   let impactedWorld = impactMerge.world;
+  // Couche HOI4 (src/runtime/hoi/) : le moteur fait avancer économie et production
+  // sur les jours du saut, APRÈS les impacts IA pour que ceux-ci comptent dès ce
+  // tour. Inerte tant que la partie n'a pas de world.hoi. Recalculé depuis
+  // baseWorld à chaque appel, donc sans double comptage si la fonction repasse.
+  impactedWorld = advanceHoiLayer(impactedWorld, { fromDate: baseGame.gameDate, toDate: nextGame.gameDate });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats
