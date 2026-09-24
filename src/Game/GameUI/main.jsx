@@ -24,6 +24,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { ensureHoiTechTree } from "../AI/gameplayLazy.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -302,6 +303,29 @@ const Main = ({
     }, 60000);
     return () => clearInterval(iv);
   }, [hasNoGames]);
+
+  // Couche HOI4 : une partie qui a world.hoi mais pas encore d'arbre de recherche
+  // (nouvelle partie, ou partie de la phase 1) en reçoit un peu après son
+  // chargement. ensureHoiTechTree ne fait rien pour une partie ordinaire ou déjà
+  // équipée, et attend la fin d'un saut en cours.
+  useEffect(() => {
+    const gameId = String(activeGame?.id || "");
+    if (!gameId || hasNoGames) return undefined;
+    let stopped = false;
+    let timer = null;
+    const attempt = () => {
+      ensureHoiTechTree({ gameId })
+        .then((result) => {
+          if (!stopped && result?.status === "busy") timer = setTimeout(attempt, 30000);
+        })
+        .catch(() => {});
+    };
+    timer = setTimeout(attempt, 5000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [activeGame?.id, hasNoGames]);
 
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);

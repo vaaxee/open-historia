@@ -5,13 +5,18 @@
 // du dernier saut, pénuries en rouge. Le lanceur n'existe que pour une partie qui
 // a world.hoi (useHoiLayerActive) ; une partie ordinaire ne voit rien de neuf.
 //
-// Lecture seule en phase 1 : réaffecter des usines depuis ce panneau viendra en
-// phase 2. Pour l'instant, c'est l'IA qui le fait, par economyOps.
+// Phase 2 : pour son propre pays, le joueur réaffecte ses usines militaires et
+// ouvre des lignes sur les équipements débloqués. Il passe par la même opération
+// que l'IA (economyOps "line"), donc par les mêmes bornes : pas plus d'usines que
+// le pays n'en a, et une usine ajoutée à une ligne en fait baisser l'efficacité.
 
 import React, { useEffect, useMemo, useState } from "react";
 
+import { applyEconomyOps } from "../../runtime/hoi/economyOps.js";
 import { findNationKey } from "../../runtime/hoi/engine.js";
 import { HOI_SERIES } from "../../runtime/hoi/presets.js";
+import { getEquipmentSpec, unlockedEquipment } from "../../runtime/hoi/techTree.js";
+import { HOI_WRITE_ERRORS, updateHoiLayer } from "./hoiWrites.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -45,6 +50,19 @@ const Section = ({ title, children, aside = null }) => (
 const Empty = ({ children }) => (
   <div style={{ color: muted, fontSize: "0.78rem" }}>{children}</div>
 );
+
+const stepButton = (disabled) => ({
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 6,
+  color: "white",
+  cursor: disabled ? "default" : "pointer",
+  fontSize: "0.75rem",
+  lineHeight: 1,
+  opacity: disabled ? 0.4 : 1,
+  padding: "0.2rem 0",
+  width: "1.4rem",
+});
 
 const EfficiencyBar = ({ value }) => (
   <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 5, overflow: "hidden", width: "100%" }}>
@@ -93,6 +111,35 @@ const ProductionPanel = ({ isOpen, onClose }) => {
 
   const nation = hoi?.nations?.[selected] ?? null;
   const report = hoi?.lastReport?.nations?.[selected] ?? null;
+  const editable = Boolean(nation) && selected === playerKey;
+
+  // Factory reassignment (player's own country only).
+  const [pending, setPending] = useState(false);
+  // What the engine said about the last click (an adjustment arrives WITH a
+  // successful write), kept until the next one.
+  const [message, setMessage] = useState("");
+  const [newEquipment, setNewEquipment] = useState("");
+  const usedFactories = (nation?.lines ?? []).reduce((sum, line) => sum + line.factories, 0);
+  const freeFactories = Math.max(0, (nation?.factories?.military ?? 0) - usedFactories);
+  const openable = editable
+    ? unlockedEquipment(hoi, nation).filter((id) => !(nation.lines ?? []).some((line) => line.equipment === id))
+    : [];
+  const setLineFactories = async (payload) => {
+    if (!editable || pending) return;
+    setPending(true);
+    setMessage("");
+    try {
+      const result = await updateHoiLayer((current) => {
+        const applied = applyEconomyOps(current, [{ op: "line", polity: playerKey, ...payload }]);
+        return applied.applied ? { hoi: applied.hoi, notes: applied.notes } : { error: "unchanged", notes: applied.notes };
+      });
+      // An adjusted or refused move says why, in the engine's own words.
+      const note = result.notes.map((entry) => entry.text.replace(/^economyOps — /, "")).join(" ");
+      setMessage(note || (result.ok ? "" : (HOI_WRITE_ERRORS[result.error] ?? result.error)));
+    } finally {
+      setPending(false);
+    }
+  };
   const shortages = report?.shortages ?? {};
   const resources = nation
     ? [...new Set([...Object.keys(nation.stocks ?? {}), ...Object.keys(nation.extraction ?? {}), ...Object.keys(shortages)])].sort()
@@ -198,15 +245,48 @@ const ProductionPanel = ({ isOpen, onClose }) => {
               )}
             </Section>
 
-            <Section title="Production lines">
+            <Section
+              title="Production lines"
+              aside={editable ? (
+                <span style={{ color: muted, fontSize: "0.66rem" }}>
+                  <span data-no-translate>{freeFactories}</span> free military factories
+                </span>
+              ) : null}
+            >
+              {message && <div style={{ color: "#fbbf24", fontSize: "0.7rem", marginBottom: "0.5rem" }}>{message}</div>}
               {(nation.lines ?? []).length === 0 ? <Empty>No production line.</Empty> : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
                   {nation.lines.map((line) => (
                     <div key={line.id}>
-                      <div style={{ display: "flex", fontSize: "0.82rem", justifyContent: "space-between", marginBottom: "0.25rem" }}>
-                        <span data-no-translate style={{ fontWeight: 700 }}>{line.equipment}</span>
-                        <span style={{ color: muted }}>
-                          <span data-no-translate>{line.factories}</span> factories · <span data-no-translate>{line.produced}</span> built
+                      <div style={{ alignItems: "center", display: "flex", fontSize: "0.82rem", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+                        <span data-no-translate style={{ fontWeight: 700 }}>
+                          {getEquipmentSpec(hoi, line.equipment)?.label ?? line.equipment}
+                        </span>
+                        <span style={{ alignItems: "center", color: muted, display: "flex", gap: "0.35rem" }}>
+                          {editable && (
+                            <button
+                              type="button"
+                              aria-label="One factory less"
+                              disabled={pending || line.factories === 0}
+                              onClick={() => setLineFactories({ lineId: line.id, factories: line.factories - 1 })}
+                              style={stepButton(pending || line.factories === 0)}
+                            >
+                              −
+                            </button>
+                          )}
+                          <span><span data-no-translate>{line.factories}</span> factories</span>
+                          {editable && (
+                            <button
+                              type="button"
+                              aria-label="One factory more"
+                              disabled={pending || freeFactories === 0}
+                              onClick={() => setLineFactories({ lineId: line.id, factories: line.factories + 1 })}
+                              style={stepButton(pending || freeFactories === 0)}
+                            >
+                              +
+                            </button>
+                          )}
+                          <span>· <span data-no-translate>{line.produced}</span> built</span>
                         </span>
                       </div>
                       <EfficiencyBar value={line.efficiency} />
@@ -221,6 +301,42 @@ const ProductionPanel = ({ isOpen, onClose }) => {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+              {editable && openable.length > 0 && (
+                <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", marginTop: "0.75rem" }}>
+                  <select
+                    value={openable.includes(newEquipment) ? newEquipment : openable[0]}
+                    onChange={(event) => setNewEquipment(event.target.value)}
+                    aria-label="Equipment for a new line"
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      borderRadius: 7,
+                      color: "white",
+                      flex: 1,
+                      fontSize: "0.74rem",
+                      padding: "0.3rem 0.4rem",
+                    }}
+                  >
+                    {openable.map((id) => (
+                      <option key={id} value={id} style={{ background: "#18181b" }} data-no-translate>
+                        {getEquipmentSpec(hoi, id)?.label ?? id}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={pending || freeFactories === 0}
+                    title={freeFactories === 0 ? "Free a military factory first" : ""}
+                    onClick={() => setLineFactories({
+                      equipment: openable.includes(newEquipment) ? newEquipment : openable[0],
+                      factories: 1,
+                    })}
+                    style={{ ...stepButton(pending || freeFactories === 0), padding: "0.3rem 0.6rem", width: "auto" }}
+                  >
+                    Open a line
+                  </button>
                 </div>
               )}
             </Section>

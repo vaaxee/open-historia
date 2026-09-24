@@ -37,8 +37,8 @@ export const DOCK_WIDTH = `${DOCK_WIDTH_REM}rem`;
 export const DOCK_RIGHT_EDGE_REM = tidy(DOCK_LEFT_REM + DOCK_WIDTH_REM);
 export const BESIDE_DOCK_LEFT = `${tidy(DOCK_RIGHT_EDGE_REM + 0.5)}rem`;
 
-// A launcher that only some games have — Production, for a game with the HOI4
-// economy layer (production.jsx) — widens the dock at runtime. Both the dock
+// Launchers that only some games have — Production and Research, for a game
+// with the HOI4 layer (production.jsx, research.jsx) — widen the dock at runtime. Both the dock
 // and Search ask these with the same count, so they stay in step; with no extra
 // launcher they return exactly DOCK_WIDTH and BESIDE_DOCK_LEFT.
 export const dockWidthFor = (extraLaunchers = 0) => `${dockWidthRem(DOCK_LAUNCHERS.length + extraLaunchers)}rem`;
