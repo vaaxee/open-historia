@@ -71,7 +71,7 @@ const round2 = (value) => Math.round(value * 100) / 100;
 const pct = (value) => `${value > 0 ? "+" : ""}${Math.round(value * 100)}%`;
 
 // « Pétrole », « petrole », « PETROLE » : une seule ressource (research.js).
-export { normalizeResourceKey };
+export { normalizeResourceKey } from "./research.js";
 
 const slug = (value) => normalizeResourceKey(value).replace(/_/g, "-").slice(0, 40);
 

@@ -816,11 +816,12 @@ const projectOpSchema = {
 // the receipt reports.
 const economyOpSchema = {
   type: "object",
-  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories.",
+  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech.",
   properties: {
-    op: { type: "string", enum: ["modifier", "stock", "line"] },
+    op: { type: "string", enum: ["modifier", "stock", "line", "research"] },
     polity: textSchema("Country name as in [ÉCONOMIE]."),
-    value: { type: "number", description: "modifier: -0.5 to 0.5." },
+    value: { type: "number", description: "modifier: -0.5 to 0.5; research: 0-0.25 of its cost." },
+    techId: textSchema("research: tech id."),
     days: { type: "number", description: "modifier: 1-365, default 30." },
     label: textSchema("modifier: its cause; same label replaces."),
     resource: textSchema("stock: resource name."),
@@ -2770,6 +2771,70 @@ export const GAMEPLAY_TOOLS = Object.freeze({
 });
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
+
+// Couche HOI4, phase 2 : l'arbre de recherche d'une campagne, écrit une fois
+// (gameplay.js, generateHoiTechTree). Hors de GAMEPLAY_TOOLS : ce n'est pas une
+// tâche du catalogue d'invites, et runtime/hoi/techTree.js revalide tout.
+// Resources are an array of {resource, amount}, not a map: Gemini's function
+// dialect drops free-form objects.
+export const HOI_TECH_TREE_TOOL = makeTool(
+  "submit_tech_tree",
+  "Submit the research tree for this campaign.",
+  {
+    type: "object",
+    properties: {
+      techs: {
+        type: "array",
+        description: "25 to 45 technologies across the five branches, in prerequisite order.",
+        items: {
+          type: "object",
+          properties: {
+            id: textSchema("Short unique id: lowercase ascii and underscores."),
+            name: textSchema("Display name, in French."),
+            branch: { type: "string", enum: ["infanterie", "artillerie", "blindes", "aviation", "industrie"] },
+            year: { type: "integer", description: "Historical year the technology became available." },
+            days: { type: "integer", description: "Research time in days, 60 to 400." },
+            requires: stringArraySchema("Ids of prerequisite technologies (0 to 3)."),
+            effects: {
+              type: "array",
+              description: "1 to 3 effects.",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["unlock", "efficiency", "extraction", "cost"] },
+                  equipment: textSchema("unlock: new equipment id; cost: equipment whose unit cost drops."),
+                  label: textSchema("unlock: equipment display name, in French."),
+                  unitCost: { type: "number", description: "unlock: industrial capacity per unit, 0.1 to 60." },
+                  resources: {
+                    type: "array",
+                    description: "unlock: resources per factory per month.",
+                    items: {
+                      type: "object",
+                      properties: {
+                        resource: textSchema("A resource listed in the request."),
+                        amount: { type: "number", description: "0.1 to 5." },
+                      },
+                      required: ["resource", "amount"],
+                      additionalProperties: false,
+                    },
+                  },
+                  resource: textSchema("extraction: the resource."),
+                  value: { type: "number", description: "efficiency 0.01-0.05; extraction 0.05-0.3; cost 0.05-0.25." },
+                },
+                required: ["type"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["id", "name", "branch", "year", "days", "requires", "effects"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["techs"],
+    additionalProperties: false,
+  },
+);
 
 // A game without the HOI4 economy layer must be asked for exactly what it was
 // asked for before the layer existed: this clone drops every impacts.economyOps

@@ -16,6 +16,15 @@ import {
 } from "../../runtime/applicationReceipt.js";
 import { advanceHoiLayer } from "../../runtime/hoi/engine.js";
 import { applyEconomyOpsFromEvents } from "../../runtime/hoi/economyOps.js";
+import { HOI_EQUIPMENT, pickHoiSeries } from "../../runtime/hoi/presets.js";
+import {
+  collectHoiResources,
+  fallbackTechTree,
+  installTechTree,
+  isUsableTechTree,
+  normalizeTechTree,
+} from "../../runtime/hoi/techTree.js";
+import { HOI_FALLBACK_TECH_TREES } from "../../runtime/hoi/techTreePresets.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
@@ -78,6 +87,7 @@ import {
   normalizeGameplayPayload,
   validateGameplayPayload,
   withoutEconomyOps,
+  HOI_TECH_TREE_TOOL,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -281,7 +291,7 @@ import {
   scriptedBeatsInSpan,
   worldShareShortfall,
 } from "./worldDirection.js";
-import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
+import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, gameDateYear, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   NO_RESPONSE_BODY_NOTE,
   beginSimulation,
@@ -2217,7 +2227,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     const economy = normalizeString(variables.economySummary);
     if (economy) {
-      systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\n${economy}`;
+      systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\nResearch is engine-run too: it picks every country's research except the player's, and finishes technologies on its own. Never have a country field, build or unveil equipment listed as not yet unlocked. A stolen blueprint, a defecting engineer or an allied exchange may speed one AVAILABLE technology with an economyOps research entry (techId from the list, value up to 0.25 of its cost); it never hands a technology over outright.\n${economy}`;
     }
   }
 
@@ -6661,7 +6671,12 @@ const applySimulationResult = async ({
   // sur les jours du saut, APRÈS les impacts IA pour que ceux-ci comptent dès ce
   // tour. Inerte tant que la partie n'a pas de world.hoi. Recalculé depuis
   // baseWorld à chaque appel, donc sans double comptage si la fonction repasse.
-  impactedWorld = advanceHoiLayer(impactedWorld, { fromDate: baseGame.gameDate, toDate: nextGame.gameDate });
+  impactedWorld = advanceHoiLayer(impactedWorld, {
+    fromDate: baseGame.gameDate,
+    toDate: nextGame.gameDate,
+    // Le moteur choisit la recherche de tous les pays, sauf celle du joueur.
+    player: toCountryName(normalizeString(baseGame.country)),
+  });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats
@@ -15040,3 +15055,117 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
 // Clearer name for what this now does. The old export stays because main.jsx
 // imports it dynamically and the docs reference it by name.
 export const maybeRunIdlePulse = maybeSendIdleDiplomacy;
+
+// ---- Couche HOI4, phase 2 : l'arbre de recherche --------------------------
+// Écrit une fois par campagne : par l'IA (tâche hoiTechTree, une seule requête),
+// sinon par l'arbre de secours de la série (runtime/hoi/techTreePresets.js). Le
+// moteur revalide tout (runtime/hoi/techTree.js), puis l'installe dans world.hoi
+// avec les techs antérieures à la date de la partie déjà acquises.
+//
+// Lancé par main.jsx au chargement d'une partie HOI4 sans arbre : une nouvelle
+// partie, ou une partie de la phase 1 qui n'en avait pas encore.
+
+// Parties pour lesquelles l'IA a déjà été sollicitée pendant cette session : si
+// elle a échoué et qu'aucun arbre de secours n'existe pour l'époque, on ne la
+// relance qu'au prochain chargement.
+const hoiTechTreeAttempts = new Set();
+let hoiTechTreeInFlight = false;
+
+const HOI_TECH_TREE_EXAMPLE = JSON.stringify(
+  { techs: HOI_FALLBACK_TECH_TREES[1936].techs.filter((tech) => ["char_leger_2", "char_moyen", "prospection"].includes(tech.id)) },
+  null,
+  1,
+);
+
+const buildHoiTechTreePrompt = ({ date, series, resources, equipment }) => [
+  "You design the research tree of a grand-strategy campaign in the spirit of Hearts of Iron IV.",
+  "The engine, not you, will run it: it validates every field and clamps anything out of bounds, so stay inside the bounds below.",
+  "",
+  `Campaign start: ${date}${series ? ` (era preset ${series})` : ""}.`,
+  `Resources that exist in this campaign (use ONLY these): ${resources.join(", ") || "acier"}.`,
+  `Base equipment everyone already produces (never unlock these; you may lower their cost): ${equipment}.`,
+  "",
+  "Rules:",
+  "- 25 to 45 technologies, spread over the five branches: infanterie, artillerie, blindes, aviation, industrie.",
+  "- Years historically plausible for the era: some a few years BEFORE the start (already known to major powers), most within the next 10 years.",
+  "- days between 60 and 400; later and bigger technologies cost more.",
+  "- requires lists 0 to 3 ids of earlier technologies; no loops.",
+  "- effects, 1 to 3 per technology:",
+  "  unlock: a NEW equipment id (lowercase_ascii), a French label, unitCost 0.1-60 (rifles ~0.5, artillery ~4, tanks 8-20, aircraft 20-45) and 1-3 resources with amounts 0.1-5 per factory per month.",
+  "  efficiency: raises the production efficiency cap, value 0.01-0.05.",
+  "  extraction: raises extraction of one listed resource, value 0.05-0.3.",
+  "  cost: lowers the unit cost of an existing or unlocked equipment, value 0.05-0.25.",
+  "- Every name and label in French.",
+  "",
+  "Format example (three technologies from another campaign):",
+  HOI_TECH_TREE_EXAMPLE,
+].join("\n");
+
+// Une requête à l'IA ; renvoie l'arbre validé et les corrections, ou lève.
+export const generateHoiTechTree = async ({ date, series = null, resources = [], signal } = {}) => {
+  const equipment = Object.entries(HOI_EQUIPMENT).map(([id, spec]) => `${id} (unitCost ${spec.unitCost})`).join(", ");
+  const systemPrompt = buildHoiTechTreePrompt({ date, series, resources, equipment });
+  const response = await callAI(systemPrompt, [
+    { role: "user", parts: [{ text: `Write the research tree for a campaign starting ${date}.` }] },
+  ], { signal, taskKey: "hoiTechTree", tool: HOI_TECH_TREE_TOOL });
+  const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+  const parsed = response?.toolInput ?? extractJsonPayload(rawText);
+  if (!parsed || typeof parsed !== "object") throw new Error("tech tree response did not contain a structured payload");
+  return normalizeTechTree(parsed, { startYear: gameDateYear(date), resources, source: "ai" });
+};
+
+// Donne un arbre à la partie HOI4 active si elle n'en a pas. Silencieux : un
+// échec laisse la partie sans technologies, et le prochain chargement réessaie.
+// Renvoie ce qui s'est passé, pour le journal et les tests.
+export const ensureHoiTechTree = async ({ gameId = "", signal } = {}) => {
+  if (hoiTechTreeInFlight || isSimulationBusy()) return { status: "busy" };
+  const world = await readWorldState({ force: true });
+  if (!world?.hoi || isUsableTechTree(world.hoi.tech?.tree)) return { status: "skip" };
+  hoiTechTreeInFlight = true;
+  try {
+    const game = await readGameData({ force: true });
+    const date = normalizeString(game.gameDate) || normalizeString(game.startDate);
+    const startYear = gameDateYear(date);
+    const series = world.hoi.series ?? pickHoiSeries(date);
+    const resources = collectHoiResources(world.hoi);
+
+    let tree = null;
+    let notes = [];
+    let source = "";
+    const attemptKey = normalizeString(gameId) || date;
+    if (!hoiTechTreeAttempts.has(attemptKey)) {
+      hoiTechTreeAttempts.add(attemptKey);
+      try {
+        const generated = await generateHoiTechTree({ date, series, resources, signal });
+        if (isUsableTechTree(generated.tree)) {
+          ({ tree, notes } = generated);
+          source = "ai";
+        } else {
+          notes = generated.notes;
+        }
+      } catch (error) {
+        logDebugEvent("hoi", "Tech tree: the AI could not write one.", { error: normalizeString(error?.message || error) });
+      }
+    }
+    if (!tree) {
+      tree = fallbackTechTree(series, { startYear, resources });
+      source = tree ? `fallback-${series}` : "";
+    }
+    if (!tree) {
+      logDebugEvent("hoi", "Tech tree: none available for this era yet; will retry on next load.", { date, series });
+      return { status: "unavailable", notes };
+    }
+
+    // Relu juste avant l'écriture : un tour a pu passer pendant l'appel.
+    if (isSimulationBusy()) return { status: "busy" };
+    const fresh = await readWorldState({ force: true });
+    if (!fresh?.hoi || isUsableTechTree(fresh.hoi.tech?.tree)) return { status: "skip" };
+    await writeWorldState({ ...fresh, hoi: installTechTree(fresh.hoi, tree, { date }) });
+    logDebugEvent("hoi", `Tech tree installed (${source}, ${tree.techs.length} techs).`, {
+      corrections: notes.slice(0, 20),
+    });
+    return { status: "installed", source, techs: tree.techs.length, notes };
+  } finally {
+    hoiTechTreeInFlight = false;
+  }
+};

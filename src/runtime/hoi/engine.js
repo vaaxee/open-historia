@@ -320,11 +320,39 @@ const buildOtherNationsLines = (world, playerKey, limit) => {
         .filter((entry) => entry.factories > 0)
         .map((entry) => `${entry.equipment} ${entry.factories}`)
         .join(", ");
+      const techs = world.hoi.tech?.tree ? (nation.research?.done ?? []).length : 0;
       return `- ${key} : ${num(nation.factories?.civilian)} civiles / ${num(nation.factories?.military)} militaires`
         + (lines ? ` (lignes : ${lines})` : "")
+        + (techs ? `, ${techs} techs` : "")
         + (shortages.length ? ` — pénurie de ${shortages.join(", ")}` : "")
         + ".";
     });
+};
+
+// La recherche d'une nation, pour le prompt : en cours, emplacements libres,
+// acquises au dernier saut, et les équipements de l'arbre déjà débloqués — l'IA
+// ne doit pas raconter les autres. Rien tant que la partie n'a pas d'arbre.
+const buildResearchPromptLines = (hoi, nation, report) => {
+  const tree = hoi?.tech?.tree;
+  if (!tree || !Array.isArray(tree.techs)) return [];
+  const byId = new Map(tree.techs.map((tech) => [tech.id, tech]));
+  const research = nation.research ?? { done: [], slots: [] };
+  const active = research.slots
+    .map((slot) => {
+      const tech = byId.get(slot.techId);
+      return tech ? `${tech.name} [id ${tech.id}] ${Math.min(99, Math.round((slot.progress / Math.max(1, tech.days)) * 100))} %` : null;
+    })
+    .filter(Boolean);
+  const done = new Set(research.done);
+  const unlocked = Object.entries(tree.equipment ?? {})
+    .filter(([, spec]) => done.has(spec.techId))
+    .map(([id]) => id);
+  const locked = Object.keys(tree.equipment ?? {}).filter((id) => !unlocked.includes(id));
+  const out = [`Recherche : ${active.join(" ; ") || "aucune en cours"} (${done.size} techs acquises).`];
+  if (report?.researched?.length) out.push(`Acquises au dernier saut : ${report.researched.join(", ")}.`);
+  if (unlocked.length) out.push(`Équipements débloqués par la recherche : ${unlocked.join(", ")}.`);
+  if (locked.length) out.push(`Pas encore débloqués (ne pas les faire apparaître) : ${locked.join(", ")}.`);
+  return out;
 };
 
 // `others` : nombre d'autres puissances résumées en une ligne (0 = aucune).
@@ -350,6 +378,7 @@ export const buildEconomyPromptBlock = (world, polity, { others = 0 } = {}) => {
     lines.push(`Dernier saut (${report.days} j) : production ${produced || "nulle"}.`);
     if (short) lines.push(`Pénuries : ${short}. Le récit doit en tenir compte.`);
   }
+  lines.push(...buildResearchPromptLines(world.hoi, nation, report));
   if (others > 0) {
     const rest = buildOtherNationsLines(world, key, others);
     if (rest.length) lines.push("Autres puissances :", ...rest);
