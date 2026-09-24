@@ -14,7 +14,8 @@ import {
   searchLocalPlaces,
   subscribeWorldPlaceIndex,
 } from "../../runtime/placeSearch.js";
-import { BESIDE_DOCK_LEFT, DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM } from "./hudDock.js";
+import { besideDockLeftFor, DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM } from "./hudDock.js";
+import { useHoiLayerActive } from "./production.jsx";
 
 // A small magnifier beside the launcher dock, not a fifth launcher: smaller
 // than the dock's buttons and sitting on the same baseline as their bottoms.
@@ -157,6 +158,8 @@ const localEntry = (place) => ({
 
 const Search = memo(({ mapRef }) => {
   const isMobile = useIsMobile();
+  // The dock is one launcher wider in a game with the HOI4 layer (production.jsx).
+  const hasProduction = useHoiLayerActive();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState(null);
@@ -345,7 +348,7 @@ const Search = memo(({ mapRef }) => {
         bottom: phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM,
         // hudDock.js derives this from the dock's launcher count, so a new
         // launcher can't end up underneath it.
-        left: phoneBar ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT,
+        left: phoneBar ? `${DOCK_LEFT_REM}rem` : besideDockLeftFor(hasProduction ? 1 : 0),
         height: size,
         width: expanded ? (isMobile ? "calc(100vw - 1rem)" : "17rem") : size,
         overflow: "visible",

@@ -44,6 +44,7 @@ import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet 
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+import { enableHoiLayerFromPresets } from "../../runtime/hoi/presets.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import {
@@ -1597,9 +1598,19 @@ const LibraryTopBar = () => {
     }
   };
 
+  // Couche HOI4 : world.hoi avec les valeurs de départ (runtime/hoi/presets.js),
+  // série choisie d'après la date de départ. Read-merge-write du monde entier,
+  // comme pour une faction : saveGame écrit `world` tel quel.
+  const enableHoiLayerOnGame = async (gameId, worldOverride = null) => {
+    const details = await loadGameDetails(gameId);
+    const world = worldOverride ?? details?.data?.world ?? {};
+    const game = details?.data?.game ?? {};
+    return enableHoiLayerFromPresets(world, { startDate: game.startDate || game.gameDate }).world;
+  };
+
   // Create the game from the scenario with the starting country and difficulty
   // the player chose in the two-step picker, then open its editor.
-  const startGameForCountry = async (scenario, countryCode, difficulty) => {
+  const startGameForCountry = async (scenario, countryCode, difficulty, hoiLayer = false) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setEditorError(null);
@@ -1608,16 +1619,22 @@ const LibraryTopBar = () => {
     // the remounted menu must come up closed, over the new game.
     setMenuOpen(false);
     try {
+      // With the HOI4 layer the game is activated only once world.hoi is written:
+      // an already-running game could otherwise save its copy of the world over it.
       const details = await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
-        setActive: true,
+        setActive: !hoiLayer,
       });
       // gamePatch merges — a full `game` write would REPLACE game.json and wipe
       // startDate/gameDate/round (the "Undated" bug).
       const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(details.game.id, { gamePatch });
+      }
+      if (hoiLayer) {
+        await saveGame(details.game.id, { world: await enableHoiLayerOnGame(details.game.id) });
+        await activateGame(details.game.id);
       }
       await openGameEditor(details.game.id);
     } catch (nextError) {
@@ -1631,7 +1648,7 @@ const LibraryTopBar = () => {
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
   // scenario only for what it doesn't set, so the scenario is never touched.
-  const startGameForFaction = async (scenario, faction, difficulty) => {
+  const startGameForFaction = async (scenario, faction, difficulty, hoiLayer = false) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setEditorError(null);
@@ -1669,7 +1686,10 @@ const LibraryTopBar = () => {
       // renderer on so its regions paint; a landless faction leaves the flag as-is.
       if ((faction.regionIds ?? []).length) world.customRegions = true;
 
-      await saveGame(gameId, { world, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
+      // Couche HOI4 : dans la même écriture, et après l'ajout de la faction pour
+      // qu'elle ait son économie (base neutre).
+      const finalWorld = hoiLayer ? await enableHoiLayerOnGame(gameId, world) : world;
+      await saveGame(gameId, { world: finalWorld, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
 
       // Colour and flag live in their own runtime assets. createGame set this game
       // active, so JSON_URLS.colors/flags now resolve to it — and reading them gives
@@ -2406,6 +2426,8 @@ const LibraryTopBar = () => {
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+  // Couche HOI4 (runtime/hoi/) : cochée à l'étape de la difficulté, off par défaut.
+  const [hoiLayerPick, setHoiLayerPick] = useState(false);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -2589,7 +2611,7 @@ const LibraryTopBar = () => {
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.
-  const choosePlayCountry = async (countryCode, difficulty) => {
+  const choosePlayCountry = async (countryCode, difficulty, hoiLayer = false) => {
     const gid = playGameId;
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
@@ -2600,6 +2622,9 @@ const LibraryTopBar = () => {
       const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
+      }
+      if (hoiLayer) {
+        await saveGame(gid, { world: await enableHoiLayerOnGame(gid) });
       }
       await activateGame(gid);
     } catch (nextError) {
@@ -2616,16 +2641,18 @@ const LibraryTopBar = () => {
 
   const pickDifficulty = (difficultyId) => {
     const draft = difficultyPick;
+    const hoiLayer = hoiLayerPick;
     setDifficultyPick(null);
+    setHoiLayerPick(false);
     if (draft?.faction) {
-      startGameForFaction(countryPicker, draft.faction, difficultyId);
+      startGameForFaction(countryPicker, draft.faction, difficultyId, hoiLayer);
       return;
     }
     const countryCode = draft?.countryCode || "";
     if (playGameId) {
-      choosePlayCountry(countryCode, difficultyId);
+      choosePlayCountry(countryCode, difficultyId, hoiLayer);
     } else {
-      startGameForCountry(countryPicker, countryCode, difficultyId);
+      startGameForCountry(countryPicker, countryCode, difficultyId, hoiLayer);
     }
   };
 
@@ -2819,6 +2846,32 @@ const LibraryTopBar = () => {
                     <span>{selectedCountryOption.name}</span>
                   </div>
                 )}
+                <label
+                  style={{
+                    alignItems: "flex-start",
+                    background: hoiLayerPick ? "rgba(96,165,250,0.12)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${hoiLayerPick ? "rgba(96,165,250,0.45)" : "rgba(255,255,255,0.1)"}`,
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    display: "flex",
+                    gap: "0.55rem",
+                    marginBottom: "0.7rem",
+                    padding: "0.55rem 0.65rem",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={hoiLayerPick}
+                    onChange={(event) => setHoiLayerPick(event.target.checked)}
+                    style={{ marginTop: "0.15rem" }}
+                  />
+                  <span style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+                    <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>HOI4 layer (economy &amp; production)</span>
+                    <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.7rem", lineHeight: 1.4 }}>
+                      Resources, factories and production lines computed by the engine every turn. Detailed starting values for 1936 and 1912, a neutral base for every other country.
+                    </span>
+                  </span>
+                </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
                   {DIFFICULTY_LEVELS.map((level) => (
                     <button

@@ -37,6 +37,14 @@ export const DOCK_WIDTH = `${DOCK_WIDTH_REM}rem`;
 export const DOCK_RIGHT_EDGE_REM = tidy(DOCK_LEFT_REM + DOCK_WIDTH_REM);
 export const BESIDE_DOCK_LEFT = `${tidy(DOCK_RIGHT_EDGE_REM + 0.5)}rem`;
 
+// A launcher that only some games have — Production, for a game with the HOI4
+// economy layer (production.jsx) — widens the dock at runtime. Both the dock
+// and Search ask these with the same count, so they stay in step; with no extra
+// launcher they return exactly DOCK_WIDTH and BESIDE_DOCK_LEFT.
+export const dockWidthFor = (extraLaunchers = 0) => `${dockWidthRem(DOCK_LAUNCHERS.length + extraLaunchers)}rem`;
+export const besideDockLeftFor = (extraLaunchers = 0) =>
+    `${tidy(DOCK_LEFT_REM + dockWidthRem(DOCK_LAUNCHERS.length + extraLaunchers) + 0.5)}rem`;
+
 // The bottom edge of the launcher BUTTONS, not of the pill: a smaller control
 // beside them looks deliberate when it lines up with the buttons, and looks
 // like a mistake when it lines up with nothing.
