@@ -16,6 +16,7 @@ import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeSpyOp } from "./spycraft.js";
 import { normalizeEconomyOp } from "./hoi/economyOps.js";
+import { normalizeBuilding } from "./hoi/buildings.js";
 import { normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
@@ -1155,6 +1156,9 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
+    // Couche HOI4, phase 3 : les stats d'un bâtiment, gérées par le moteur
+    // (runtime/hoi/buildings.js). Absent pour une structure ordinaire.
+    ...(normalizeBuilding(entry.building) ? { building: normalizeBuilding(entry.building) } : {}),
   };
 };
 

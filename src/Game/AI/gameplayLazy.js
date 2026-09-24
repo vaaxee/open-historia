@@ -36,6 +36,9 @@ export const retryPendingProjectsJump = async (...args) => (await gameplay()).re
 export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
 // Couche HOI4 : l'arbre de recherche d'une partie qui n'en a pas encore.
 export const ensureHoiTechTree = async (...args) => (await gameplay()).ensureHoiTechTree(...args);
+// Phase 3 : bâtiments installés une fois, et les sites où le joueur peut bâtir.
+export const ensureHoiBuildings = async (...args) => (await gameplay()).ensureHoiBuildings(...args);
+export const listHoiBuildSites = async (...args) => (await gameplay()).listHoiBuildSites(...args);
 
 // --- Rollback ---------------------------------------------------------------
 export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);

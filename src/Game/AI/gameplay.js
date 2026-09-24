@@ -14,7 +14,7 @@ import {
   tallyAppliedEvents,
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
-import { advanceHoiLayer } from "../../runtime/hoi/engine.js";
+import { advanceHoiLayer, findNationKey, refreshBuildingBonuses } from "../../runtime/hoi/engine.js";
 import { applyEconomyOpsFromEvents } from "../../runtime/hoi/economyOps.js";
 import { HOI_EQUIPMENT, pickHoiSeries } from "../../runtime/hoi/presets.js";
 import {
@@ -25,6 +25,11 @@ import {
   normalizeTechTree,
 } from "../../runtime/hoi/techTree.js";
 import { HOI_FALLBACK_TECH_TREES } from "../../runtime/hoi/techTreePresets.js";
+import {
+  TECH_GATEABLE_BUILDINGS,
+  applyBuildingDamage,
+  installBuildings,
+} from "../../runtime/hoi/buildings.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
@@ -2227,7 +2232,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     const economy = normalizeString(variables.economySummary);
     if (economy) {
-      systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\nResearch is engine-run too: it picks every country's research except the player's, and finishes technologies on its own. Never have a country field, build or unveil equipment listed as not yet unlocked. A stolen blueprint, a defecting engineer or an allied exchange may speed one AVAILABLE technology with an economyOps research entry (techId from the list, value up to 0.25 of its cost); it never hands a technology over outright.\n${economy}`;
+      systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\nResearch is engine-run too: it picks every country's research except the player's, and finishes technologies on its own. Never have a country field, build or unveil equipment listed as not yet unlocked. A stolen blueprint, a defecting engineer or an allied exchange may speed one AVAILABLE technology with an economyOps research entry (techId from the list, value up to 0.25 of its cost); it never hands a technology over outright.\nBuildings are engine-run as well. When an event founds a factory, refinery, mine, steelworks, fort, radar station, airfield or port, give it a markerOps build whose kind names that type ("usine militaire", "usine civile", "raffinerie", "mine", "aciérie", "fort", "radar", "aérodrome", "port"): the engine turns it into a construction site that the owner's civilian factories must finish, so never narrate it as operating before the engine reports it done. A bombing raid or sabotage that hits one carries an economyOps damage entry with its exact map name as target (value 0.1 to 0.5 of its condition); repairs happen on their own, never narrate them as instant.\n${economy}`;
     }
   }
 
@@ -6618,6 +6623,20 @@ const applySimulationResult = async ({
   // ensuite n'y arriverait pas. Sans world.hoi, rien ne change.
   const economyOps = applyEconomyOpsFromEvents(baseWorld.hoi, freshEvents, { date: baseGame.gameDate });
   for (const note of economyOps.notes) noteReceipt(receipt, note.kind, note.text);
+  // Phase 3 : bombardements et sabotages (economyOps "damage") sur les
+  // bâtiments de la carte, événement par événement.
+  let damagedMarkers = null;
+  if (baseWorld.hoi) {
+    let markers = normalizeArray(baseWorld.markers);
+    for (const event of freshEvents) {
+      const damage = normalizeArray(event?.impacts?.economyOps).filter((op) => op?.op === "damage");
+      if (!damage.length) continue;
+      const result = applyBuildingDamage(markers, damage, { title: normalizeString(event?.title) });
+      markers = result.markers;
+      if (result.applied) damagedMarkers = markers;
+      for (const note of result.notes) noteReceipt(receipt, note.kind, note.text);
+    }
+  }
 
   const impactMerge = applyEventImpactsToWorld({
     colors: baseColors,
@@ -6631,6 +6650,7 @@ const applySimulationResult = async ({
     world: {
       ...baseWorld,
       ...(economyOps.hoi ? { hoi: economyOps.hoi } : {}),
+      ...(damagedMarkers ? { markers: damagedMarkers } : {}),
       // Whatever comes through here ends a scene: a skip is refused while one is
       // in progress and clears a leftover one, and a scene resolving is this.
       activeInteractive: null,
@@ -15095,6 +15115,7 @@ const buildHoiTechTreePrompt = ({ date, series, resources, equipment }) => [
   "  efficiency: raises the production efficiency cap, value 0.01-0.05.",
   "  extraction: raises extraction of one listed resource, value 0.05-0.3.",
   "  cost: lowers the unit cost of an existing or unlocked equipment, value 0.05-0.25.",
+  `  building: makes one building type constructible (only these ids: ${TECH_GATEABLE_BUILDINGS.join(", ")}); use it for 2 to 4 technologies at most, the rest stay buildable from the start.`,
   "- Every name and label in French.",
   "",
   "Format example (three technologies from another campaign):",
@@ -15169,3 +15190,83 @@ export const ensureHoiTechTree = async ({ gameId = "", signal } = {}) => {
     hoiTechTreeInFlight = false;
   }
 };
+
+// ---- Couche HOI4, phase 3 : les bâtiments ---------------------------------
+// Une fois par partie HOI4, au chargement (main.jsx) : les structures d'avant la
+// couche reçoivent un type (niveau 1, sans effet économique pour ce qui était
+// déjà compté), et les usines abstraites des grands pays deviennent des
+// complexes industriels dans leurs plus grandes villes. Ensuite, le moteur
+// (advanceHoiLayer) tient tout à jour.
+
+let hoiBuildingsInFlight = false;
+
+// Les villes de chaque pays suivi, par la même carte que l'IA : une ville
+// appartient au pays qui possède la région où elle se trouve.
+const hoiCitiesByNation = async (world) => {
+  const context = await lazyLookupContext({ world })();
+  const byNation = new Map();
+  for (const city of context.cityRows) {
+    const owner = context.regionOfCity(city)?.owner;
+    const key = owner ? findNationKey(world.hoi, owner) : null;
+    if (!key) continue;
+    if (!byNation.has(key)) byNation.set(key, []);
+    byNation.get(key).push({ name: city.name, coordinates: city.coordinates, population: city.population });
+  }
+  return byNation;
+};
+
+const hoiSlug = (value) => normalizeString(value).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+
+export const ensureHoiBuildings = async () => {
+  if (hoiBuildingsInFlight || isSimulationBusy()) return { status: "busy" };
+  const world = await readWorldState({ force: true });
+  if (!world?.hoi || world.hoi.buildingsInstalled) return { status: "skip" };
+  hoiBuildingsInFlight = true;
+  try {
+    const cities = await hoiCitiesByNation(world).catch(() => new Map());
+    const game = await readGameData({ force: true });
+    if (isSimulationBusy()) return { status: "busy" };
+    const fresh = await readWorldState({ force: true });
+    if (!fresh?.hoi || fresh.hoi.buildingsInstalled) return { status: "skip" };
+    const installed = installBuildings(normalizeArray(fresh.markers), fresh.hoi.nations, {
+      citiesOf: (key) => cities.get(key) ?? [],
+      resolveNation: (owner) => findNationKey(fresh.hoi, owner),
+      resources: collectHoiResources(fresh.hoi),
+      date: normalizeString(game.gameDate),
+      makeId: (key, index) => `hoi-complexe-${hoiSlug(key)}-${index + 1}`,
+    });
+    const next = refreshBuildingBonuses({
+      ...fresh,
+      markers: installed.markers,
+      hoi: { ...fresh.hoi, nations: installed.nations, buildingsInstalled: true },
+    });
+    await writeWorldState(next);
+    logDebugEvent("hoi", `Buildings installed: ${installed.complexes} industrial complexes.`);
+    return { status: "installed", complexes: installed.complexes };
+  } finally {
+    hoiBuildingsInFlight = false;
+  }
+};
+
+// Où le joueur peut bâtir : les villes de son pays et ses propres structures.
+// [{ name, lng, lat, population, source: "city"|"marker" }], les plus grandes d'abord.
+export const listHoiBuildSites = async () => {
+  const world = await readWorldState({ force: true });
+  const game = await readGameData({ force: true });
+  if (!world?.hoi) return [];
+  const key = findNationKey(world.hoi, toCountryName(normalizeString(game.country)))
+    ?? findNationKey(world.hoi, game.country);
+  if (!key) return [];
+  const cities = (await hoiCitiesByNation(world).catch(() => new Map())).get(key) ?? [];
+  const markers = normalizeArray(world.markers)
+    .filter((marker) => findNationKey(world.hoi, marker.ownerCode) === key)
+    .map((marker) => ({ name: marker.name, lng: marker.lng, lat: marker.lat, population: 0, source: "marker" }));
+  return [
+    ...cities
+      .map((city) => ({ name: city.name, lng: city.coordinates[0], lat: city.coordinates[1], population: city.population, source: "city" }))
+      .sort((a, b) => b.population - a.population || a.name.localeCompare(b.name)),
+    ...markers,
+  ];
+};
+

@@ -15,13 +15,15 @@
 //   { op: "stock", polity, resource, amount }        don, saisie, commerce ponctuel
 //   { op: "line", polity, equipment|lineId, factories } réaffecter des usines
 //   { op: "research", polity, techId, value }         plans volés, coopération (phase 2)
+//   { op: "damage", target, value }                   bombardement, sabotage (phase 3,
+//                                                     appliqué par buildings.js)
 //
 // Appliquées dans applySimulationResult (gameplay.js) AVANT advanceHoiLayer, pour
 // qu'une grève racontée ce tour pèse déjà sur la production de ce tour. Le
 // panneau Production passe aussi par "line" : le joueur a les mêmes bornes.
 
 import { addGameDays, isGameDate } from "../gameDates.js";
-import { HOI_TUNING, findNationKey, normalizeLine, normalizeNation } from "./engine.js";
+import { HOI_TUNING, effectiveFactories, findNationKey, normalizeLine, normalizeNation } from "./engine.js";
 import { effectiveTechCost, indexTechTree, isTechAvailable, normalizeResourceKey } from "./research.js";
 import { getEquipmentSpec, isEquipmentUnlocked, unlockedEquipment } from "./techTree.js";
 
@@ -42,7 +44,7 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage"]);
 
 const OP_ALIASES = Object.freeze({
   modifier: "modifier",
@@ -61,6 +63,9 @@ const OP_ALIASES = Object.freeze({
   research: "research",
   tech: "research",
   espionage: "research",
+  damage: "damage",
+  bombing: "damage",
+  sabotage: "damage",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -81,6 +86,21 @@ const slug = (value) => normalizeResourceKey(value).replace(/_/g, "-").slice(0, 
 export const normalizeEconomyOp = (entry) => {
   if (!isObject(entry)) return null;
   const op = OP_ALIASES[normalizeResourceKey(entry.op ?? entry.type ?? entry.kind).replace(/_/g, "")];
+  // Phase 3 : un bombardement ou un sabotage vise une structure, pas un pays ;
+  // appliqué sur la carte par buildings.js (applyBuildingDamage).
+  if (op === "damage") {
+    const target = text(entry.target ?? entry.building ?? entry.markerId ?? entry.name);
+    const value = finite(entry.value ?? entry.amount);
+    const reason = text(entry.reason ?? entry.note);
+    if (!target) return null;
+    return {
+      op,
+      target,
+      ...(Number.isFinite(value) && value > 0 ? { value } : {}),
+      ...(text(entry.polity) ? { polity: text(entry.polity) } : {}),
+      ...(reason ? { reason } : {}),
+    };
+  }
   const polity = text(entry.polity ?? entry.polityCode ?? entry.ownerCode ?? entry.country ?? entry.target);
   if (!op || !polity) return null;
   const reason = text(entry.reason ?? entry.note);
@@ -208,10 +228,12 @@ const applyLine = (nation, op, { say, hoi }) => {
 
   const target = lines[index];
   const usedElsewhere = lines.reduce((sum, entry, i) => (i === index ? sum : sum + entry.factories), 0);
-  const available = Math.max(0, nation.factories.military - usedElsewhere);
+  // Usines militaires des bâtiments comprises (phase 3), arrondies à l'unité.
+  const military = Math.floor(effectiveFactories(nation).military);
+  const available = Math.max(0, military - usedElsewhere);
   const factories = Math.min(op.factories, available);
   if (factories !== op.factories) {
-    say("adjusted", `${op.polity} can put only ${factories} military factories on ${target.equipment} (${nation.factories.military} in all, ${usedElsewhere} on other lines).`);
+    say("adjusted", `${op.polity} can put only ${factories} military factories on ${target.equipment} (${military} in all, ${usedElsewhere} on other lines).`);
   }
   // Des usines qui arrivent sur une ligne repartent de l'efficacité plancher :
   // la moyenne pondérée fait baisser la ligne au prorata, comme un rééquipement.
@@ -264,7 +286,8 @@ export const applyEconomyOps = (hoi, ops, { date = null, title = "" } = {}) => {
   const notes = [];
   const prefix = title ? `Event "${title}": ` : "";
   const say = (kind, textValue) => notes.push({ kind, text: `${prefix}economyOps — ${textValue}` });
-  const list = (Array.isArray(ops) ? ops : []).map(normalizeEconomyOp).filter(Boolean);
+  // "damage" touche la carte, pas world.hoi : applyBuildingDamage s'en charge.
+  const list = (Array.isArray(ops) ? ops : []).map(normalizeEconomyOp).filter((op) => op && op.op !== "damage");
   if (!list.length) return { hoi, applied: 0, notes };
   if (!isObject(hoi) || !isObject(hoi.nations)) {
     say("dropped", `${list.length} operation(s) ignored: this game has no economy layer.`);

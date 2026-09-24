@@ -25,6 +25,7 @@ import {
   normalizeResourceKey,
 } from "./research.js";
 import { HOI_FALLBACK_TECH_TREES } from "./techTreePresets.js";
+import { TECH_GATEABLE_BUILDINGS } from "./buildings.js";
 
 export const TECH_TREE_LIMITS = Object.freeze({
   maxTechs: 60,
@@ -56,6 +57,8 @@ const EFFECT_ALIASES = Object.freeze({
   extraction: "extraction",
   cost: "cost",
   unit_cost: "cost",
+  building: "building",
+  unlock_building: "building",
 });
 
 const BRANCH_ALIASES = Object.freeze({
@@ -118,6 +121,15 @@ const normalizeEffect = (raw, { allowed, say, where }) => {
     return null;
   }
   const value = num(raw.value);
+  // Phase 3 : un type de bâtiment du catalogue (buildings.js), et rien d'autre.
+  if (type === "building") {
+    const building = normalizeResourceKey(raw.building ?? raw.equipment ?? raw.id);
+    if (!TECH_GATEABLE_BUILDINGS.includes(building)) {
+      say(`${where}: building type "${building}" cannot be locked behind research; removed.`);
+      return null;
+    }
+    return { type, building };
+  }
   if (type === "unlock") {
     const equipment = normalizeResourceKey(raw.equipment ?? raw.equipmentId ?? raw.id);
     if (!equipment) return null;

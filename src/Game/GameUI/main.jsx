@@ -24,7 +24,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
-import { ensureHoiTechTree } from "../AI/gameplayLazy.js";
+import { ensureHoiBuildings, ensureHoiTechTree } from "../AI/gameplayLazy.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -305,18 +305,22 @@ const Main = ({
   }, [hasNoGames]);
 
   // Couche HOI4 : une partie qui a world.hoi mais pas encore d'arbre de recherche
-  // (nouvelle partie, ou partie de la phase 1) en reçoit un peu après son
-  // chargement. ensureHoiTechTree ne fait rien pour une partie ordinaire ou déjà
-  // équipée, et attend la fin d'un saut en cours.
+  // ni de bâtiments (nouvelle partie, ou partie d'une phase précédente) les
+  // reçoit un peu après son chargement. Rien pour une partie ordinaire ou déjà
+  // équipée, et on attend la fin d'un saut en cours.
   useEffect(() => {
     const gameId = String(activeGame?.id || "");
     if (!gameId || hasNoGames) return undefined;
     let stopped = false;
     let timer = null;
+    // L'arbre d'abord, puis les bâtiments (phase 3) : deux installations uniques,
+    // chacune sans effet sur une partie ordinaire ou déjà équipée.
     const attempt = () => {
       ensureHoiTechTree({ gameId })
-        .then((result) => {
-          if (!stopped && result?.status === "busy") timer = setTimeout(attempt, 30000);
+        .then(async (tree) => {
+          const buildings = await ensureHoiBuildings().catch(() => null);
+          const busy = tree?.status === "busy" || buildings?.status === "busy";
+          if (!stopped && busy) timer = setTimeout(attempt, 30000);
         })
         .catch(() => {});
     };

@@ -816,11 +816,12 @@ const projectOpSchema = {
 // the receipt reports.
 const economyOpSchema = {
   type: "object",
-  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech.",
+  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech; damage = bomb or sabotage a building.",
   properties: {
-    op: { type: "string", enum: ["modifier", "stock", "line", "research"] },
+    op: { type: "string", enum: ["modifier", "stock", "line", "research", "damage"] },
+    target: textSchema("damage: the building's exact map name."),
     polity: textSchema("Country name as in [ÉCONOMIE]."),
-    value: { type: "number", description: "modifier: -0.5 to 0.5; research: 0-0.25 of its cost." },
+    value: { type: "number", description: "modifier: -0.5 to 0.5; research: 0-0.25 of its cost; damage: 0.1-0.5." },
     techId: textSchema("research: tech id."),
     days: { type: "number", description: "modifier: 1-365, default 30." },
     label: textSchema("modifier: its cause; same label replaces."),
@@ -831,7 +832,8 @@ const economyOpSchema = {
     factories: { type: "number", description: "line: new factory total." },
     reason: textSchema("What in the event causes it."),
   },
-  required: ["op", "polity"],
+  // polity is not required: a damage op names its target building instead.
+  required: ["op"],
   additionalProperties: false,
 };
 
@@ -2801,7 +2803,8 @@ export const HOI_TECH_TREE_TOOL = makeTool(
               items: {
                 type: "object",
                 properties: {
-                  type: { type: "string", enum: ["unlock", "efficiency", "extraction", "cost"] },
+                  type: { type: "string", enum: ["unlock", "efficiency", "extraction", "cost", "building"] },
+                  building: textSchema("building: a building type id from the request that this technology makes constructible."),
                   equipment: textSchema("unlock: new equipment id; cost: equipment whose unit cost drops."),
                   label: textSchema("unlock: equipment display name, in French."),
                   unitCost: { type: "number", description: "unlock: industrial capacity per unit, 0.1 to 60." },

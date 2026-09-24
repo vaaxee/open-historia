@@ -121,7 +121,8 @@ export const indexTechTree = (tree) => {
 };
 
 export const researchSlotCount = (nation) => {
-  const civilian = num(nation?.factories?.civilian);
+  // Usines civiles des bâtiments comprises (phase 3).
+  const civilian = num(nation?.factories?.civilian) + num(nation?.buildingBonus?.civilian);
   const extra = RESEARCH_TUNING.slotThresholds.filter((threshold) => civilian >= threshold).length;
   return clamp(1 + extra, 1, RESEARCH_TUNING.maxSlots);
 };

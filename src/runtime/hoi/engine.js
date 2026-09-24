@@ -36,6 +36,13 @@
 
 import { addGameDays, compareGameDates, diffGameDays } from "../gameDates.js";
 import { advanceResearch, emptyResearchReport, normalizeBonuses, normalizeResearch } from "./research.js";
+import {
+  HOI_BUILDING_TYPES,
+  advanceConstruction,
+  statusForBuilding,
+  sumContributions,
+  syncBuildingsWithMarkers,
+} from "./buildings.js";
 
 export const HOI_VERSION = 1;
 
@@ -124,8 +131,30 @@ export const normalizeNation = (nation) => {
     // Phase 2 : ce que les technologies ont acquis (research.js).
     bonuses: normalizeBonuses(source.bonuses),
     research: normalizeResearch(source.research),
+    // Phase 3 : la file de chantiers, dans l'ordre (identifiants de structures).
+    constructionQueue: [...new Set((Array.isArray(source.constructionQueue) ? source.constructionQueue : [])
+      .map((id) => String(id ?? "").trim()).filter(Boolean))],
+    // Ce que ses bâtiments lui apportent, relevé par le moteur à chaque saut et à
+    // l'installation (buildings.js) : lu par economyOps, la recherche et les panneaux.
+    buildingBonus: normalizeBuildingBonus(source.buildingBonus),
   };
 };
+
+const normalizeBuildingBonus = (value) => ({
+  civilian: round2(Math.max(0, num(value?.civilian))),
+  military: round2(Math.max(0, num(value?.military))),
+  extraction: Object.fromEntries(
+    Object.entries(isObject(value?.extraction) ? value.extraction : {})
+      .map(([key, amount]) => [key, round2(Math.max(0, num(amount)))])
+      .filter(([, amount]) => amount > 0),
+  ),
+});
+
+// Les usines d'une nation, bâtiments compris (phase 3).
+export const effectiveFactories = (nation, bonus = nation?.buildingBonus) => ({
+  civilian: round2(num(nation?.factories?.civilian) + num(bonus?.civilian)),
+  military: round2(num(nation?.factories?.military) + num(bonus?.military)),
+});
 
 // Plafond d'efficacité d'une nation : le réglage commun, plus ses techs.
 export const nationEfficiencyCap = (nation) =>
@@ -170,8 +199,10 @@ export const productionModifier = (nation, date) => {
 };
 
 // Avance une nation de `days` jours. Pur : renvoie une nouvelle nation et un rapport.
-export const advanceNation = (inputNation, days, { date = null } = {}) => {
+// `bonus` : ce que ses bâtiments apportent (usines, extraction), phase 3.
+export const advanceNation = (inputNation, days, { date = null, bonus: bonusOverride = null } = {}) => {
   const nation = normalizeNation(inputNation);
+  const bonus = bonusOverride ?? nation.buildingBonus;
   const report = { days, produced: {}, shortages: {}, extracted: {} };
   if (!(days > 0)) return { nation, report };
 
@@ -179,12 +210,22 @@ export const advanceNation = (inputNation, days, { date = null } = {}) => {
   const monthShare = days / T.daysPerMonth;
   const stocks = { ...nation.stocks };
 
-  // 1. Extraction.
-  for (const [resource, perMonth] of Object.entries(nation.extraction)) {
+  // 1. Extraction, bâtiments compris.
+  const extraction = { ...nation.extraction };
+  for (const [resource, perMonth] of Object.entries(bonus?.extraction ?? {})) {
+    extraction[resource] = num(extraction[resource]) + num(perMonth);
+  }
+  for (const [resource, perMonth] of Object.entries(extraction)) {
     const gained = perMonth * monthShare;
     stocks[resource] = num(stocks[resource]) + gained;
     report.extracted[resource] = round2(gained);
   }
+
+  // Des usines militaires détruites ralentissent toutes les lignes au prorata :
+  // les lignes ne peuvent pas employer plus d'usines que le pays n'en a.
+  const assigned = nation.lines.reduce((sum, line) => sum + line.factories, 0);
+  const available = effectiveFactories(nation, bonus).military;
+  const staffing = assigned > 0 ? Math.min(1, available / assigned) : 1;
 
   // 2. Production, ligne par ligne, dans l'ordre de priorité (ordre du tableau).
   const modifier = productionModifier(nation, date);
@@ -210,7 +251,7 @@ export const advanceNation = (inputNation, days, { date = null } = {}) => {
     }
 
     const capacity = line.factories * T.capacityPerFactoryPerDay * days
-      * line.efficiency * (1 + modifier) * supplyRatio;
+      * line.efficiency * (1 + modifier) * supplyRatio * staffing;
     const total = line.progress + capacity / line.unitCost;
     const units = Math.floor(total);
     if (units > 0) report.produced[line.equipment] = num(report.produced[line.equipment]) + units;
@@ -245,13 +286,40 @@ const mergeReports = (a, b) => {
     shortages: add(a.shortages, b.shortages),
     extracted: add(a.extracted, b.extracted),
     researched: [...(a.researched ?? []), ...(b.researched ?? [])],
+    built: [...(a.built ?? []), ...(b.built ?? [])],
+    repaired: [...(a.repaired ?? []), ...(b.repaired ?? [])],
   };
+};
+
+// Les structures de la carte qui portent un bâtiment, rangées par pays suivi.
+const buildingsByNation = (hoi, markers) => {
+  const owned = {};
+  markers.forEach((marker, index) => {
+    if (!marker?.building) return;
+    const key = findNationKey(hoi, marker.ownerCode);
+    if (!key) return;
+    (owned[key] ??= []).push({ index, marker });
+  });
+  return owned;
+};
+
+// Relevé de ce que les bâtiments apportent à chaque nation, sans rien avancer :
+// après une installation ou des dégâts, pour que panneaux et economyOps lisent
+// des usines à jour.
+export const refreshBuildingBonuses = (world) => {
+  if (!isObject(world) || !isObject(world.hoi)) return world;
+  const owned = buildingsByNation(world.hoi, Array.isArray(world.markers) ? world.markers : []);
+  const nations = Object.fromEntries(Object.entries(world.hoi.nations || {}).map(([key, raw]) => [
+    key,
+    { ...normalizeNation(raw), buildingBonus: sumContributions((owned[key] ?? []).map((entry) => entry.marker.building)) },
+  ]));
+  return { ...world, hoi: { ...world.hoi, nations } };
 };
 
 // Point d'entrée appelé par applySimulationResult après les impacts IA.
 // Inerte sans world.hoi ou sans jours écoulés.
-// `player` : le pays du joueur. Le moteur choisit les recherches de tous les
-// autres ; celles du joueur, c'est lui qui les choisit (panneau Recherche).
+// `player` : le pays du joueur. Le moteur choisit les recherches et les chantiers
+// de tous les autres ; les siens, c'est le joueur qui les choisit (panneaux).
 export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) => {
   if (!isObject(world) || !isObject(world.hoi)) return world;
   const days = diffGameDays(fromDate, toDate);
@@ -259,22 +327,56 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
 
   const tree = world.hoi.tech?.tree ?? null;
   const playerKey = findNationKey(world.hoi, player);
+
+  // Phase 3 : les structures racontées depuis le dernier saut deviennent des
+  // chantiers, et un état posé par le récit devient un état chiffré. Seulement
+  // une fois les bâtiments installés (ensureHoiBuildings), pour qu'une structure
+  // d'avant la couche ne soit pas prise pour un chantier neuf.
+  let markers = Array.isArray(world.markers) ? [...world.markers] : [];
+  const queues = Object.fromEntries(Object.entries(world.hoi.nations || {}).map(([key, raw]) => [key, normalizeNation(raw).constructionQueue]));
+  let syncedQueues = queues;
+  if (world.hoi.buildingsInstalled) {
+    const synced = syncBuildingsWithMarkers(markers, {
+      resolveNation: (owner) => findNationKey(world.hoi, owner),
+      resources: [...new Set(Object.values(world.hoi.nations || {}).flatMap((nation) => [
+        ...Object.keys(nation?.stocks ?? {}), ...Object.keys(nation?.extraction ?? {}),
+      ]))],
+      queues,
+    });
+    markers = synced.markers;
+    syncedQueues = synced.queues;
+  }
+  const owned = buildingsByNation(world.hoi, markers);
+
   const nations = {};
   const reports = {};
   for (const [polity, raw] of Object.entries(world.hoi.nations || {})) {
-    let nation = normalizeNation(raw);
-    let report = { days: 0, produced: {}, shortages: {}, extracted: {}, ...emptyResearchReport() };
+    let nation = { ...normalizeNation(raw), constructionQueue: syncedQueues[polity] ?? [] };
+    let buildings = (owned[polity] ?? []).map((entry) => ({ ...entry }));
+    let report = { days: 0, produced: {}, shortages: {}, extracted: {}, built: [], repaired: [], ...emptyResearchReport() };
     let remaining = days;
     let elapsed = 0;
     while (remaining > 0) {
       const step = Math.min(HOI_TUNING.maxStepDays, remaining);
       elapsed += step;
       const stepDate = addDaysSafe(fromDate, elapsed);
-      const result = advanceNation(nation, step, { date: stepDate });
+      const bonus = sumContributions(buildings.map((entry) => entry.marker.building));
+      nation = { ...nation, buildingBonus: bonus };
+      const result = advanceNation(nation, step, { date: stepDate, bonus });
       const research = advanceResearch(result.nation, step, { date: stepDate, tree, auto: polity !== playerKey });
-      nation = research.nation;
-      report = mergeReports(report, { ...result.report, researched: research.researched });
+      const construction = advanceConstruction(buildings, research.nation.constructionQueue, step, {
+        effectiveCivilian: effectiveFactories(research.nation, bonus).civilian,
+        auto: polity !== playerKey,
+      });
+      buildings = construction.owned;
+      nation = { ...research.nation, constructionQueue: construction.queue };
+      report = mergeReports(report, { ...result.report, researched: research.researched, ...construction.report });
       remaining -= step;
+    }
+    // Le relevé final, et l'état affiché de chaque structure.
+    nation = { ...nation, buildingBonus: sumContributions(buildings.map((entry) => entry.marker.building)) };
+    for (const { index, marker } of buildings) {
+      markers[index] = { ...marker, status: statusForBuilding(marker.building, marker.status) };
     }
     nations[polity] = nation;
     reports[polity] = report;
@@ -282,6 +384,7 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
 
   return {
     ...world,
+    markers,
     hoi: {
       ...world.hoi,
       version: HOI_VERSION,
@@ -355,6 +458,31 @@ const buildResearchPromptLines = (hoi, nation, report) => {
   return out;
 };
 
+// Les bâtiments d'une nation, pour le prompt (phase 3) : par type, chantiers en
+// cours, dégâts, et ce qui s'est passé au dernier saut. Rien avant l'installation.
+const buildBuildingPromptLines = (world, key, nation, report) => {
+  if (!world.hoi?.buildingsInstalled) return [];
+  const owned = (Array.isArray(world.markers) ? world.markers : [])
+    .filter((marker) => marker?.building && findNationKey(world.hoi, marker.ownerCode) === key);
+  const effective = effectiveFactories(nation);
+  const out = [`Usines effectives (bâtiments compris) : ${effective.civilian} civiles, ${effective.military} militaires.`];
+  if (!owned.length) return [...out, "Bâtiments : aucun sur la carte."];
+  const counts = new Map();
+  for (const marker of owned) {
+    const label = HOI_BUILDING_TYPES[marker.building.type]?.label ?? marker.building.type;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  out.push(`Bâtiments : ${[...counts].map(([label, count]) => `${count} ${label}`).join(", ")}.`);
+  const building = owned.filter((marker) => marker.building.construction)
+    .map((marker) => `${marker.name} ${Math.min(99, Math.round((marker.building.construction.progress / marker.building.construction.cost) * 100))} %`);
+  if (building.length) out.push(`Chantiers : ${building.slice(0, 6).join(" ; ")}.`);
+  const damaged = owned.filter((marker) => marker.building.condition < 100)
+    .map((marker) => `${marker.name} ${Math.round(marker.building.condition)} %`);
+  if (damaged.length) out.push(`Endommagés (réparations en cours, automatiques) : ${damaged.slice(0, 6).join(" ; ")}.`);
+  if (report?.built?.length) out.push(`Terminés au dernier saut : ${report.built.join(", ")}.`);
+  return out;
+};
+
 // `others` : nombre d'autres puissances résumées en une ligne (0 = aucune).
 export const buildEconomyPromptBlock = (world, polity, { others = 0 } = {}) => {
   const key = findNationKey(world?.hoi, polity);
@@ -379,6 +507,7 @@ export const buildEconomyPromptBlock = (world, polity, { others = 0 } = {}) => {
     if (short) lines.push(`Pénuries : ${short}. Le récit doit en tenir compte.`);
   }
   lines.push(...buildResearchPromptLines(world.hoi, nation, report));
+  lines.push(...buildBuildingPromptLines(world, key, nation, report));
   if (others > 0) {
     const rest = buildOtherNationsLines(world, key, others);
     if (rest.length) lines.push("Autres puissances :", ...rest);

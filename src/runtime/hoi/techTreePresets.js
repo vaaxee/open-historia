@@ -10,12 +10,15 @@
 //   efficiency  + plafond d'efficacité des lignes (value 0,01 à 0,05)
 //   extraction  + extraction d'une ressource (value 0,05 à 0,3)
 //   cost        − coût unitaire d'un équipement (value 0,05 à 0,25)
+//   building    un type de bâtiment devient constructible (phase 3)
 
 const unlock = (equipment, label, unitCost, resources) => ({ type: "unlock", equipment, label, unitCost, resources });
 const res = (entries) => Object.entries(entries).map(([resource, amount]) => ({ resource, amount }));
 const efficiency = (value) => ({ type: "efficiency", value });
 const extraction = (resource, value) => ({ type: "extraction", resource, value });
 const cost = (equipment, value) => ({ type: "cost", equipment, value });
+// Phase 3 : un type de bâtiment (buildings.js) que la tech rend constructible.
+const building = (id) => ({ type: "building", building: id });
 
 const tech = (id, name, branch, year, days, requires, effects) => ({ id, name, branch, year, days, requires, effects });
 
@@ -45,14 +48,15 @@ export const HOI_FALLBACK_TECH_TREES = Object.freeze({
       tech("bombardier_tactique", "Bombardier tactique", "aviation", 1937, 180, [], [unlock("bombardiers_tactiques", "bombardiers tactiques", 28, res({ aluminium: 2, caoutchouc: 1 }))]),
       tech("chasseur_avance", "Chasseur avancé", "aviation", 1940, 240, ["chasseur_monoplan"], [unlock("chasseurs_avances", "chasseurs avancés", 32, res({ aluminium: 3, caoutchouc: 1 }))]),
       tech("bombardier_lourd", "Bombardier lourd", "aviation", 1940, 270, ["bombardier_tactique"], [unlock("bombardiers_lourds", "bombardiers lourds", 45, res({ aluminium: 4, caoutchouc: 1 }))]),
-      tech("radar", "Radar", "aviation", 1939, 210, ["chasseur_monoplan"], [cost("chasseurs_monoplans", 0.1)]),
+      tech("radar", "Radar", "aviation", 1939, 210, ["chasseur_monoplan"], [cost("chasseurs_monoplans", 0.1), building("radar")]),
       // Industrie
       tech("rationalisation", "Rationalisation industrielle", "industrie", 1936, 150, [], [efficiency(0.03)]),
       tech("prospection", "Prospection minière", "industrie", 1936, 120, [], [extraction("acier", 0.1)]),
       tech("raffinage", "Raffinage moderne", "industrie", 1937, 150, ["prospection"], [extraction("petrole", 0.15)]),
       tech("aluminium", "Électrolyse de l'aluminium", "industrie", 1938, 180, ["prospection"], [extraction("aluminium", 0.15)]),
+      tech("acierie_moderne", "Aciérie moderne", "industrie", 1937, 180, ["prospection"], [extraction("acier", 0.1), building("acierie")]),
       tech("travail_chaine", "Travail à la chaîne", "industrie", 1938, 180, ["rationalisation"], [efficiency(0.03)]),
-      tech("caoutchouc_synthetique", "Caoutchouc synthétique", "industrie", 1939, 210, ["raffinage"], [extraction("caoutchouc", 0.2)]),
+      tech("caoutchouc_synthetique", "Caoutchouc synthétique", "industrie", 1939, 210, ["raffinage"], [extraction("caoutchouc", 0.2), building("raffinerie_synthetique")]),
       tech("production_masse", "Production de masse", "industrie", 1941, 240, ["travail_chaine"], [efficiency(0.03)]),
     ]),
   }),
@@ -80,7 +84,7 @@ export const HOI_FALLBACK_TECH_TREES = Object.freeze({
       tech("bombardier_1916", "Bombardier", "aviation", 1916, 240, ["reconnaissance"], [unlock("bombardiers_biplans", "bombardiers biplans", 24, res({ acier: 2, caoutchouc: 1 }))]),
       // Industrie
       tech("organisation_travail", "Organisation scientifique du travail", "industrie", 1911, 150, [], [efficiency(0.03)]),
-      tech("acieries", "Aciéries Martin-Siemens", "industrie", 1910, 120, [], [extraction("acier", 0.1)]),
+      tech("acieries", "Aciéries Martin-Siemens", "industrie", 1910, 120, [], [extraction("acier", 0.1), building("acierie")]),
       tech("charbonnages", "Charbonnages modernes", "industrie", 1910, 120, [], [extraction("charbon", 0.1)]),
       tech("petrole", "Forage pétrolier", "industrie", 1912, 150, ["charbonnages"], [extraction("petrole", 0.15)]),
       tech("haber_bosch", "Procédé Haber-Bosch", "industrie", 1913, 180, ["charbonnages"], [cost("obus", 0.15)]),
