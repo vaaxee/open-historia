@@ -126,7 +126,7 @@ test("une nouvelle ligne n'est possible que pour un équipement du catalogue", (
   assert.equal(line.efficiency, HOI_TUNING.efficiencyFloor);
   const rockets = applyEconomyOps(hoi(), [{ op: "line", polity: "France", equipment: "fusées", factories: 3 }], { date: "1936-01-01" });
   assert.equal(rockets.applied, 0);
-  assert.match(rockets.notes[0].text, /needs one of/);
+  assert.match(rockets.notes[0].text, /is unknown; available: fusils/);
 });
 
 test("sans couche HOI4, les opérations sont ignorées et le reçu le dit", () => {

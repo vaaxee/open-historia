@@ -10,17 +10,20 @@
 // ce qui est ramené dans ces bornes ou refusé est dit dans le reçu d'application
 // (runtime/applicationReceipt.js), pour que le tour suivant sache ce qui a compté.
 //
-// Trois opérations, sur n'importe quelle nation suivie par la couche :
+// Quatre opérations, sur n'importe quelle nation suivie par la couche :
 //   { op: "modifier", polity, value, days, label }   production ±, pour une durée
 //   { op: "stock", polity, resource, amount }        don, saisie, commerce ponctuel
 //   { op: "line", polity, equipment|lineId, factories } réaffecter des usines
+//   { op: "research", polity, techId, value }         plans volés, coopération (phase 2)
 //
 // Appliquées dans applySimulationResult (gameplay.js) AVANT advanceHoiLayer, pour
-// qu'une grève racontée ce tour pèse déjà sur la production de ce tour.
+// qu'une grève racontée ce tour pèse déjà sur la production de ce tour. Le
+// panneau Production passe aussi par "line" : le joueur a les mêmes bornes.
 
 import { addGameDays, isGameDate } from "../gameDates.js";
 import { HOI_TUNING, findNationKey, normalizeLine, normalizeNation } from "./engine.js";
-import { HOI_EQUIPMENT } from "./presets.js";
+import { effectiveTechCost, indexTechTree, isTechAvailable, normalizeResourceKey } from "./research.js";
+import { getEquipmentSpec, isEquipmentUnlocked, unlockedEquipment } from "./techTree.js";
 
 // Réglages des garde-fous : un seul endroit à modifier, comme HOI_TUNING.
 export const ECONOMY_OP_LIMITS = Object.freeze({
@@ -34,9 +37,12 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   stockShareOfReserve: 0.25,
   stockMonthsOfExtraction: 1,
   stockFloor: 5,
+  // Une opération "research" avance une tech d'au plus cette part de son coût,
+  // et ne la termine jamais d'un coup.
+  researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research"]);
 
 const OP_ALIASES = Object.freeze({
   modifier: "modifier",
@@ -52,6 +58,9 @@ const OP_ALIASES = Object.freeze({
   linechange: "line",
   productionline: "line",
   factories: "line",
+  research: "research",
+  tech: "research",
+  espionage: "research",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -61,13 +70,8 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const round2 = (value) => Math.round(value * 100) / 100;
 const pct = (value) => `${value > 0 ? "+" : ""}${Math.round(value * 100)}%`;
 
-// « Pétrole », « petrole », « PETROLE » : une seule ressource.
-export const normalizeResourceKey = (value) => text(value)
-  .normalize("NFD")
-  .replace(/[̀-ͯ]/g, "")
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, "_")
-  .replace(/^_+|_+$/g, "");
+// « Pétrole », « petrole », « PETROLE » : une seule ressource (research.js).
+export { normalizeResourceKey };
 
 const slug = (value) => normalizeResourceKey(value).replace(/_/g, "-").slice(0, 40);
 
@@ -102,6 +106,13 @@ export const normalizeEconomyOp = (entry) => {
     const amount = finite(entry.amount ?? entry.delta ?? entry.value);
     if (!resource || !Number.isFinite(amount) || amount === 0) return null;
     return { ...base, resource, amount };
+  }
+
+  if (op === "research") {
+    const techId = normalizeResourceKey(entry.techId ?? entry.tech ?? entry.id);
+    const value = finite(entry.value ?? entry.amount);
+    if (!techId) return null;
+    return { ...base, techId, ...(Number.isFinite(value) && value > 0 ? { value } : {}) };
   }
 
   // op === "line"
@@ -168,24 +179,28 @@ const applyStock = (nation, op, { say }) => {
   return { ...nation, stocks: { ...nation.stocks, [op.resource]: round2(Math.max(0, current + amount)) } };
 };
 
-const applyLine = (nation, op, { say }) => {
+const applyLine = (nation, op, { say, hoi }) => {
   const lines = [...nation.lines];
   let index = op.lineId ? lines.findIndex((entry) => entry.id === op.lineId) : -1;
   if (index < 0 && op.equipment) index = lines.findIndex((entry) => normalizeResourceKey(entry.equipment) === op.equipment);
 
   if (index < 0) {
-    const spec = HOI_EQUIPMENT[op.equipment];
-    if (!spec) {
-      const known = Object.keys(HOI_EQUIPMENT).join(", ");
-      say("dropped", `${op.polity} has no production line "${op.lineId || op.equipment}", and a new line needs one of: ${known}.`);
+    // Une nouvelle ligne : un équipement de base, ou débloqué par une tech que
+    // cette nation a acquise (phase 2).
+    const spec = getEquipmentSpec(hoi, op.equipment);
+    if (!spec || !isEquipmentUnlocked(hoi, nation, op.equipment)) {
+      const known = unlockedEquipment(hoi, nation).join(", ");
+      const why = spec ? "is not unlocked yet" : "is unknown";
+      say("dropped", `${op.polity} has no production line "${op.lineId || op.equipment}", and "${op.equipment}" ${why}; available: ${known}.`);
       return nation;
     }
+    const factor = Number(nation.bonuses?.costFactor?.[op.equipment] ?? 1);
     lines.push(normalizeLine({
       id: op.equipment,
       equipment: op.equipment,
       factories: 0,
       efficiency: HOI_TUNING.efficiencyFloor,
-      unitCost: spec.unitCost,
+      unitCost: round2(spec.unitCost * factor),
       resources: { ...spec.resources },
     }, lines.length));
     index = lines.length - 1;
@@ -204,11 +219,43 @@ const applyLine = (nation, op, { say }) => {
   const efficiency = factories > 0
     ? (target.efficiency * (factories - added) + HOI_TUNING.efficiencyFloor * added) / factories
     : target.efficiency;
-  lines[index] = { ...target, factories, efficiency: round2(clamp(efficiency, HOI_TUNING.efficiencyFloor, HOI_TUNING.efficiencyCap)) };
+  lines[index] = { ...target, factories, efficiency: round2(clamp(efficiency, HOI_TUNING.efficiencyFloor, 0.99)) };
   return { ...nation, lines };
 };
 
-const APPLIERS = { modifier: applyModifier, stock: applyStock, line: applyLine };
+// Plans volés, coopération, défection : une avance sur une tech disponible, en
+// cours ou non, sans jamais la terminer d'un coup.
+const applyResearch = (nation, op, { say, hoi, date }) => {
+  const tech = indexTechTree(hoi?.tech?.tree).get(op.techId);
+  if (!tech) {
+    say("dropped", `"${op.techId}" is not in this campaign's tech tree.`);
+    return nation;
+  }
+  if (!isTechAvailable(nation, tech)) {
+    const done = (nation.research?.done ?? []).includes(tech.id);
+    say("dropped", `${op.polity} ${done ? "already has" : "lacks the prerequisites for"} "${tech.name}".`);
+    return nation;
+  }
+  const L = ECONOMY_OP_LIMITS;
+  const wanted = Number.isFinite(op.value) ? op.value : 0.1;
+  const share = clamp(wanted, 0, L.researchBoostMax);
+  if (share !== wanted) say("adjusted", `research boost on "${tech.name}" for ${op.polity} was capped to ${pct(share)} of its cost.`);
+  const cost = effectiveTechCost(tech, date);
+  const ceiling = Math.max(0, cost - 1);
+  const research = nation.research;
+  const slot = research.slots.find((entry) => entry.techId === tech.id);
+  const before = slot ? slot.progress : Number(research.partial?.[tech.id] ?? 0);
+  const after = round2(Math.min(ceiling, before + share * cost));
+  if (after <= before) return nation;
+  return {
+    ...nation,
+    research: slot
+      ? { ...research, slots: research.slots.map((entry) => (entry.techId === tech.id ? { ...entry, progress: after } : entry)) }
+      : { ...research, partial: { ...research.partial, [tech.id]: after } },
+  };
+};
+
+const APPLIERS = { modifier: applyModifier, stock: applyStock, line: applyLine, research: applyResearch };
 
 // Applique une liste d'opérations à world.hoi. Pur : renvoie un nouveau hoi, le
 // nombre d'opérations qui ont eu un effet, et les notes pour le reçu.
@@ -233,7 +280,7 @@ export const applyEconomyOps = (hoi, ops, { date = null, title = "" } = {}) => {
       continue;
     }
     const before = normalizeNation(nations[key]);
-    const after = APPLIERS[op.op](before, { ...op, polity: key }, { date, say });
+    const after = APPLIERS[op.op](before, { ...op, polity: key }, { date, say, hoi });
     if (after !== before) {
       nations[key] = after;
       applied += 1;

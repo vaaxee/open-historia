@@ -35,6 +35,7 @@
 // }
 
 import { addGameDays, compareGameDates, diffGameDays } from "../gameDates.js";
+import { advanceResearch, emptyResearchReport, normalizeBonuses, normalizeResearch } from "./research.js";
 
 export const HOI_VERSION = 1;
 
@@ -78,7 +79,9 @@ export const normalizeLine = (line, index = 0) => {
     id: String(line.id || `line-${index + 1}`),
     equipment: String(line.equipment || "équipement"),
     factories: Math.max(0, Math.floor(num(line.factories))),
-    efficiency: clamp(num(line.efficiency, HOI_TUNING.efficiencyFloor), HOI_TUNING.efficiencyFloor, HOI_TUNING.efficiencyCap),
+    // Borne absolue ici ; le plafond propre à la nation (techs comprises) est
+    // appliqué par advanceNation.
+    efficiency: clamp(num(line.efficiency, HOI_TUNING.efficiencyFloor), HOI_TUNING.efficiencyFloor, 0.99),
     unitCost: Math.max(0.01, num(line.unitCost, 1)),
     resources: Object.fromEntries(
       Object.entries(isObject(line.resources) ? line.resources : {})
@@ -118,8 +121,15 @@ export const normalizeNation = (nation) => {
     },
     lines: (Array.isArray(source.lines) ? source.lines : []).map(normalizeLine).filter(Boolean),
     modifiers: (Array.isArray(source.modifiers) ? source.modifiers : []).map(normalizeModifier).filter(Boolean),
+    // Phase 2 : ce que les technologies ont acquis (research.js).
+    bonuses: normalizeBonuses(source.bonuses),
+    research: normalizeResearch(source.research),
   };
 };
+
+// Plafond d'efficacité d'une nation : le réglage commun, plus ses techs.
+export const nationEfficiencyCap = (nation) =>
+  clamp(HOI_TUNING.efficiencyCap + num(nation?.bonuses?.efficiencyCap), HOI_TUNING.efficiencyFloor, 0.99);
 
 // Active la couche sur une partie : world.hoi est créé avec les nations fournies.
 // `series` : la série de valeurs de départ utilisée (presets.js), pour l'affichage.
@@ -178,6 +188,7 @@ export const advanceNation = (inputNation, days, { date = null } = {}) => {
 
   // 2. Production, ligne par ligne, dans l'ordre de priorité (ordre du tableau).
   const modifier = productionModifier(nation, date);
+  const cap = nationEfficiencyCap(nation);
   const lines = nation.lines.map((line) => {
     if (!line.factories) return line;
 
@@ -205,13 +216,13 @@ export const advanceNation = (inputNation, days, { date = null } = {}) => {
     if (units > 0) report.produced[line.equipment] = num(report.produced[line.equipment]) + units;
 
     // L'efficacité monte vers le plafond tant que la ligne tourne.
-    const gap = T.efficiencyCap - line.efficiency;
+    const gap = Math.max(0, cap - line.efficiency);
     const growth = 1 - (1 - T.efficiencyGrowthPerDay) ** (days * supplyRatio);
     return {
       ...line,
       progress: round2(total - units),
       produced: line.produced + units,
-      efficiency: round2(clamp(line.efficiency + gap * growth, T.efficiencyFloor, T.efficiencyCap)),
+      efficiency: round2(clamp(line.efficiency + gap * growth, T.efficiencyFloor, Math.max(cap, line.efficiency))),
     };
   });
 
@@ -233,21 +244,26 @@ const mergeReports = (a, b) => {
     produced: add(a.produced, b.produced),
     shortages: add(a.shortages, b.shortages),
     extracted: add(a.extracted, b.extracted),
+    researched: [...(a.researched ?? []), ...(b.researched ?? [])],
   };
 };
 
 // Point d'entrée appelé par applySimulationResult après les impacts IA.
 // Inerte sans world.hoi ou sans jours écoulés.
-export const advanceHoiLayer = (world, { fromDate, toDate } = {}) => {
+// `player` : le pays du joueur. Le moteur choisit les recherches de tous les
+// autres ; celles du joueur, c'est lui qui les choisit (panneau Recherche).
+export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) => {
   if (!isObject(world) || !isObject(world.hoi)) return world;
   const days = diffGameDays(fromDate, toDate);
   if (!(days > 0)) return world;
 
+  const tree = world.hoi.tech?.tree ?? null;
+  const playerKey = findNationKey(world.hoi, player);
   const nations = {};
   const reports = {};
   for (const [polity, raw] of Object.entries(world.hoi.nations || {})) {
     let nation = normalizeNation(raw);
-    let report = { days: 0, produced: {}, shortages: {}, extracted: {} };
+    let report = { days: 0, produced: {}, shortages: {}, extracted: {}, ...emptyResearchReport() };
     let remaining = days;
     let elapsed = 0;
     while (remaining > 0) {
@@ -255,8 +271,9 @@ export const advanceHoiLayer = (world, { fromDate, toDate } = {}) => {
       elapsed += step;
       const stepDate = addDaysSafe(fromDate, elapsed);
       const result = advanceNation(nation, step, { date: stepDate });
-      nation = result.nation;
-      report = mergeReports(report, result.report);
+      const research = advanceResearch(result.nation, step, { date: stepDate, tree, auto: polity !== playerKey });
+      nation = research.nation;
+      report = mergeReports(report, { ...result.report, researched: research.researched });
       remaining -= step;
     }
     nations[polity] = nation;
