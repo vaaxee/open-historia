@@ -117,7 +117,7 @@ Un bâtiment produit au prorata de son état, et plus rien sous 25 %. Les techs 
 - Chaque usine civile donne 5 points par jour ; 20 % des usines civiles vont aux biens de consommation (`BUILDING_TUNING`).
 - 15 usines au plus travaillent sur un même chantier (75 points par jour).
 - Les réparations passent d'elles-mêmes et en premier : une réparation complète coûte la moitié du coût d'un niveau, par niveau.
-- Le joueur bâtit dans la section Construction du panneau Production : sur un bassin industriel de son pays, une ville que la carte situe chez lui, ou une de ses structures. Il peut aussi agrandir, réordonner et annuler.
+- Le joueur bâtit dans la section Construction du panneau Production : sur un bassin industriel de son pays, une ville que le scénario place lui-même dans une de ses régions, ou une de ses structures. Il peut aussi agrandir, réordonner et annuler.
 - Les pays gérés par le moteur agrandissent une usine, ou en bâtissent une à côté de leurs complexes, un chantier à la fois.
 
 **L'IA.**
@@ -139,7 +139,7 @@ npm run dev                             # lancer le jeu
 
 - Les forts, radars, aérodromes et ports n'ont pas encore d'effet en jeu : leur niveau est seulement lu par l'IA, en attendant les armées et les fronts.
 - Le lieu d'un chantier se choisit dans une liste ; le clic sur la carte viendra avec sa refonte visuelle.
-- Les contours grossiers de certains scénarios peuvent rattacher une ville frontalière au mauvais pays dans la liste des sites (par exemple Kinshasa à la France).
+- Sur une carte dont le scénario ne fournit pas ses villes (tuiles vectorielles), la liste des sites se limite aux bassins industriels du pays et à ses propres structures.
 - Un changement de propriétaire d'une région ne transfère pas encore les bâtiments qui s'y trouvent.
 - Les opérations du Game Master ne passent pas par `economyOps`.
 - Une partie ordinaire déjà en cours ne peut pas encore activer la couche.

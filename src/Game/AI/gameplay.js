@@ -267,7 +267,7 @@ import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
-import { downloadScenarioJsonAsset, getLibraryState } from "../../runtime/library.js";
+import { getLibraryState } from "../../runtime/library.js";
 import { getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
@@ -15203,25 +15203,14 @@ let hoiBuildingsInFlight = false;
 
 // Les villes de chaque pays suivi, par la même carte que l'IA : une ville
 // appartient au pays qui possède la région où elle se trouve.
-// Un scénario sur tuiles vectorielles (la carte de base) ne garde pas ses villes
-// en JSON : on prend alors celles du scénario par défaut, les grandes villes du
-// monde, rattachées aux régions de cette carte-ci.
-const hoiFallbackCities = async () => {
-  const collection = await downloadScenarioJsonAsset("default", "citiesGeojson").catch(() => null);
-  return normalizeArray(collection?.features)
-    .map((feature) => ({
-      name: normalizeString(feature?.properties?.city || feature?.properties?.name),
-      coordinates: feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null,
-      population: Number(feature?.properties?.population) || 0,
-    }))
-    .filter((city) => city.name && Array.isArray(city.coordinates));
-};
-
+// Seulement les villes que le scénario place lui-même : emprunter la liste
+// mondiale d'un autre scénario et la rattacher à des contours grossiers donnait
+// Kinshasa à la France. Une carte sur tuiles vectorielles, sans villes en JSON,
+// n'en propose donc aucune ; restent les bassins industriels et les structures.
 const hoiCitiesByNation = async (world) => {
   const context = await lazyLookupContext({ world })();
-  const cities = context.cityRows.length ? context.cityRows : await hoiFallbackCities();
   const byNation = new Map();
-  for (const city of cities) {
+  for (const city of context.cityRows) {
     // Seulement une ville dans le contour d'une région : le rattachement au
     // centre le plus proche donnait Kinshasa à la France et Tripoli à l'Allemagne.
     const placed = context.placeCity(city);

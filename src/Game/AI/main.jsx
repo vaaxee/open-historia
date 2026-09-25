@@ -81,6 +81,7 @@ import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
 import { foreignAgentBrief } from "../../runtime/spycraft.js";
 import { renderReminders } from "../../runtime/gmChanges.js";
+import { withRealpolitik } from "./realpolitik.js";
 import { describeGoalForAdvisor, playerGoalOf } from "../../runtime/playerGoal.js";
 import { describeReportsForPrompt, normalizeReports } from "../../runtime/reports.js";
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
@@ -2923,7 +2924,15 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         : "";
 
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    const prompt = `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    // [Realpolitik] (realpolitik.js): the leader weighs a proposal by reason of
+    // state at the game's date, not by an assistant's morals. Appended here, not
+    // written into the frozen leader prompt, so it reaches existing campaigns.
+    return withRealpolitik(prompt, {
+        speaker,
+        dateReadable: gameData?.gameDate ? formatDateReadable(gameData.gameDate) : "",
+        participants: countries,
+    });
 }
 
 let advisorHistory = [];
