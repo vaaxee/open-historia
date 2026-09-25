@@ -15,6 +15,7 @@ import {
   ofPlace,
   startConstruction,
 } from "./buildings.js";
+import { SLOT_BUILDING_TYPES, provinceSiteError } from "./provinces.js";
 
 const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -31,15 +32,19 @@ const withNation = (world, key, nation) => ({
 const ownedIndex = (world, key, markerId) => (Array.isArray(world.markers) ? world.markers : [])
   .findIndex((marker) => String(marker?.id) === String(markerId) && findNationKey(world.hoi, marker.ownerCode) === key);
 
-// Un bâtiment neuf sur un site (ville ou structure du joueur). Il apparaît tout
-// de suite sur la carte, en chantier, un peu décalé du site pour ne pas le cacher.
-export const queueNewBuilding = (world, { polity, type, site, resource = null, date = "", id }) => {
+// Un bâtiment neuf sur un site (une province du joueur depuis la phase 4, ou
+// une ville, une structure). Il apparaît tout de suite sur la carte, en
+// chantier, un peu décalé du site pour ne pas le cacher. Avec une province
+// ({ id, slots, coastal, used }), ses emplacements et sa côte sont vérifiés.
+export const queueNewBuilding = (world, { polity, type, site, resource = null, date = "", id, province = null }) => {
   const owner = nationOf(world, polity);
   if (!owner) return { world, error: "unknown-nation" };
   const spec = HOI_BUILDING_TYPES[type];
   if (!spec || type === "complexe_industriel") return { world, error: "unknown-type" };
   if (!isBuildingTypeUnlocked(type, owner.nation, world.hoi.tech?.tree)) return { world, error: "type-locked" };
   if (!site || !Number.isFinite(site.lng) || !Number.isFinite(site.lat)) return { world, error: "no-site" };
+  const siteError = provinceSiteError(province, type, province?.used);
+  if (siteError) return { world, error: siteError };
   const markers = Array.isArray(world.markers) ? world.markers : [];
   // Plusieurs chantiers sur le même site : chacun un cran plus loin.
   const nearby = markers.filter((marker) => Math.abs(marker.lat - site.lat) < 0.3 && Math.abs(marker.lng - site.lng) < 0.3).length;
@@ -55,16 +60,20 @@ export const queueNewBuilding = (world, { polity, type, site, resource = null, d
     resource,
   });
   if (!marker) return { world, error: "no-site" };
+  if (province?.id) marker.provinceId = String(province.id);
   const nation = { ...owner.nation, constructionQueue: [...owner.nation.constructionQueue, marker.id] };
   return { world: { ...withNation(world, owner.key, nation), markers: [...markers, marker] }, error: null };
 };
 
-// Un niveau de plus sur un bâtiment du joueur.
-export const queueUpgrade = (world, { polity, markerId }) => {
+// Un niveau de plus sur un bâtiment du joueur ; un niveau d'usine prend un
+// emplacement de plus dans sa province (si on la donne).
+export const queueUpgrade = (world, { polity, markerId, province = null }) => {
   const owner = nationOf(world, polity);
   if (!owner) return { world, error: "unknown-nation" };
   const index = ownedIndex(world, owner.key, markerId);
   if (index < 0 || !world.markers[index].building) return { world, error: "unknown-type" };
+  if (province && SLOT_BUILDING_TYPES.includes(world.markers[index].building.type)
+    && (Number(province.used) || 0) + 1 > (Number(province.slots) || 0)) return { world, error: "no-slot" };
   const started = startConstruction(world.markers[index].building);
   if (started.error) return { world, error: started.error };
   const markers = [...world.markers];

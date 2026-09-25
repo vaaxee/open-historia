@@ -46,7 +46,7 @@ export const PROVINCE_TUNING = Object.freeze({
   minCoastBuckets: 3,
 });
 
-export const PROVINCE_GEN_VERSION = 1;
+export const PROVINCE_GEN_VERSION = 3;
 
 const round5 = (value) => Math.round(value * 1e5) / 1e5;
 const text = (value) => String(value ?? "").trim();
@@ -108,6 +108,23 @@ const clipConvex = (points, a, b, c) => {
 // La plus grande ville d'une liste, pour nommer une province d'un seul tenant.
 const largestCity = (cities) => [...cities]
   .sort((a, b) => (Number(b.population) || 0) - (Number(a.population) || 0) || text(a.name).localeCompare(text(b.name)))[0]?.name ?? "";
+
+// Un nom de région qui n'en est pas un (« Province #114499 », couleur d'une
+// carte importée d'une image) : on le remplace par une ville.
+export const isPlaceholderName = (name) => /^(province|region|région|state|état)?\s*#?[0-9a-f]{6}$/i.test(text(name))
+  || /^(province|region|région|state|état)\s*#/i.test(text(name));
+
+// La ville la plus proche d'un point, pour une région sans ville ni vrai nom.
+const nearestCity = (cities, [x, y]) => {
+  let best = null; let bestD = Infinity;
+  const k = Math.cos((y * Math.PI) / 180) ** 2;
+  for (const city of cities) {
+    const [cx, cy] = city.coordinates;
+    const d = (cx - x) ** 2 * k + (cy - y) ** 2;
+    if (d < bestD) { bestD = d; best = city; }
+  }
+  return best?.name ?? "";
+};
 
 const areaKm2 = (geometry) => turfArea({ type: "Feature", geometry, properties: {} }) / 1e6;
 
@@ -259,30 +276,51 @@ export const generateProvinces = (regions, { cities = [], tuning = PROVINCE_TUNI
     const inside = cityRows.filter(({ coordinates: [x, y] }) => x >= minX && x <= maxX && y >= minY && y <= maxY
       && pointInPolygons([x, y], polygons));
     const regionId = regionIdOf(region, index);
-    const regionName = text(region?.properties?.name) || regionId;
+    const ownName = text(region?.properties?.name);
+    const regionName = (!isPlaceholderName(ownName) && ownName)
+      || largestCity(inside)
+      || nearestCity(cityRows, [(minX + maxX) / 2, (minY + maxY) / 2])
+      || ownName || regionId;
     const parts = splitRegion(region.geometry, inside, tuning);
     parts.forEach((part, k) => {
       const partPolygons = polygonsOf(part.geometry);
       // Le nom : la ville qui a donné la graine, sinon la plus grande dans la
       // province, sinon « Région – n ».
-      const cityName = part.cityName || inside
-        .filter((city) => pointInPolygons(city.coordinates, partPolygons))
+      const partCities = inside.filter((city) => pointInPolygons(city.coordinates, partPolygons));
+      const cityName = part.cityName || [...partCities]
         .sort((a, b) => (Number(b.population) || 0) - (Number(a.population) || 0))[0]?.name || "";
+      const city = partCities.find((entry) => text(entry.name) === cityName);
       features.push({
         type: "Feature",
         properties: {
           id: `${regionId}#${k + 1}`,
           regionId,
-          name: cityName || (parts.length > 1 ? `${regionName} – ${k + 1}` : regionName),
+          name: cityName || regionName,
+          owner: text(region?.properties?.owner),
           city: cityName,
+          ...(city ? { anchor: city.coordinates.map((value) => Math.round(value * 1e4) / 1e4) } : {}),
           areaKm2: Math.round(areaKm2(part.geometry)),
-          population: inside.filter((city) => pointInPolygons(city.coordinates, partPolygons))
-            .reduce((sum, city) => sum + (Number(city.population) || 0), 0),
+          population: partCities.reduce((sum, entry) => sum + (Number(entry.population) || 0), 0),
         },
         geometry: part.geometry,
       });
     });
   });
+
+  // Les provinces sans ville : « Région – n », numérotées sur toute la carte
+  // quand plusieurs partagent un nom (ou qu'une province-ville le porte déjà).
+  const cityNames = new Set(features.filter((feature) => feature.properties.city).map((feature) => feature.properties.name));
+  const unnamed = new Map();
+  for (const feature of features) {
+    if (feature.properties.city) continue;
+    const base = feature.properties.name;
+    if (!unnamed.has(base)) unnamed.set(base, []);
+    unnamed.get(base).push(feature);
+  }
+  for (const [base, group] of unnamed) {
+    if (group.length === 1 && !cityNames.has(base)) continue;
+    group.forEach((feature, k) => { feature.properties.name = `${base} – ${k + 1}`; });
+  }
 
   // Voisinages et côtes, par les sommets partagés. Une case que touche une
   // région d'eau est une côte ; sur une carte sans régions d'eau, une case que

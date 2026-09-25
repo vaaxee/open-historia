@@ -2,7 +2,7 @@
 
 Ce fork ajoute sous la narration d'Open Historia une couche de gestion façon Hearts of Iron IV : ressources, production, puis technologies, focus, armées et fronts. Principe : **l'IA raconte, le moteur compte**.
 
-## État : phase 3
+## État : phase 4
 
 | Élément | Fichier | Statut |
 | --- | --- | --- |
@@ -22,7 +22,9 @@ Ce fork ajoute sous la narration d'Open Historia une couche de gestion façon He
 | Bâtiments et construction | `src/runtime/hoi/buildings.js`, `constructionOps.js` | Fait (phase 3) |
 | Icônes des bâtiments sur la carte | `src/Game/Map/buildingIcons.js`, `MarkersLayer.jsx` | Fait (phase 3) |
 | Fiche au clic | `src/Game/Selection/Features.jsx` | Fait (phase 3), stats du bâtiment |
-| Section « Construction » | `src/Game/GameUI/construction.jsx`, dans le panneau Production | Fait (phase 3) |
+| Section « Construction » | `src/Game/GameUI/construction.jsx`, dans le panneau Production | Fait (phase 3), sites par province (phase 4) |
+| Provinces : génération, terrain, cache | `server/hoiProvinceGen.js`, `hoiTerrain.js`, `hoiElevation.js`, `hoiProvinces.js` | Fait (phase 4) |
+| Provinces dans le jeu : carte, emplacements, choix sur la carte | `src/Game/Map/ProvincesLayer.jsx`, `hoiProvinceStore.js`, `src/runtime/hoi/provinces.js` | Fait (phase 4) |
 
 La couche est **inerte** tant qu'une partie n'a pas de `world.hoi` : une partie Open Historia ordinaire ne change pas. Elle ne voit ni le bloc `[ÉCONOMIE]`, ni `economyOps` dans l'outil du tour (26 363 caractères, comme avant), ni les boutons Production et Recherche, et ne déclenche jamais la tâche `hoiTechTree`.
 
@@ -126,12 +128,13 @@ Un bâtiment produit au prorata de son état, et plus rien sous 25 %. Les techs 
 - Un `markerOps` « damaged » ou « destroyed » devient un état chiffré (60 % au plus, ou 0).
 - Le bloc `[ÉCONOMIE]` décrit les bâtiments, les chantiers, les dégâts et ce qui a été terminé.
 
-## Les provinces (phase 4, en cours)
+## Les provinces (phase 4)
 
 Les régions restent les États (les transferts de territoire de l'IA ne changent pas) ; chacune est découpée en provinces, qui portent le terrain, les emplacements de construction et les voisinages des futurs fronts.
 
-- **Génération, sur le serveur** : `server/hoiProvinceGen.js`. Graines sur les plus grandes villes, complétées au plus loin, 3 passes de Lloyd, cellules de Voronoï coupées au contour de la région. Plus fin près des villes, plus grossier dans le vide : 10 000 km² en moyenne au départ, réglable dans `PROVINCE_TUNING`. Nom = la ville principale, sinon « Région – n ».
-- **Cache** : `server/hoiProvinces.js` écrit `server/data/hoi-provinces/<clé>.json`, refait seulement quand les régions, les villes, les tuiles d'altitude ou les réglages changent. Servi par `GET /api/hoi/provinces`. Scénario WW2+ : 7 165 provinces, 8 s la première fois, 8,4 Mo.
+- **Génération, sur le serveur** : `server/hoiProvinceGen.js`. Graines sur les plus grandes villes, complétées au plus loin, 3 passes de Lloyd, cellules de Voronoï coupées au contour de la région. Plus fin près des villes, plus grossier dans le vide : 10 000 km² en moyenne au départ, réglable dans `PROVINCE_TUNING`.
+- **Noms** : la ville principale de la province, sinon « Région – n ». Quand la région n'a qu'un code pour nom (« Province #114499 », cas de tout le scénario WW2+), sa plus grande ville en tient lieu, sinon la ville la plus proche ; les noms restent uniques sur la carte.
+- **Cache** : `server/hoiProvinces.js` écrit `server/data/hoi-provinces/<clé>.json`, refait seulement quand les régions, les villes, les tuiles d'altitude ou les réglages changent. Servi par `GET /api/hoi/provinces`. Scénario WW2+ : 6 963 provinces, 6 s la première fois, 8,5 Mo. Chaque province porte aussi son propriétaire de départ (celui de sa région) et un point où bâtir (sa ville, sinon un point intérieur).
 - **Terrain** : `server/hoiTerrain.js`, à partir de l'**altitude réelle** (moyenne, relief, maximum sur une grille de points de la province), de la latitude et de quelques zones (déserts, marais). Sans les tuiles, une règle simple par zones prend le relais. Emplacements : urbain 5, plaine 3, forêt et colline 2, le reste 1, plus 1 par tranche de 200 000 habitants.
 
 ### Données d'altitude
@@ -142,7 +145,13 @@ Tuiles téléchargées une fois, à la main, par `node scripts/hoi-fetch-elevati
 
 ### Recalage du scénario WW2+
 
-La carte du scénario WW2+ (`server/data/scenarios/hoi4-states-copy-copy-2/`) venait d'une image de HOI4 étalée entre 65° S et 65° N : Paris tombait en mer et Berlin en Suède. `scripts/hoi-georeference.mjs` la recale sur les frontières actuelles, à partir d'une cinquantaine de pays au territoire stable depuis 1936 (polynôme de degré 3 puis correction locale). Écart moyen restant : 0,6°. Paris, Berlin, Madrid, Varsovie, Rome, Londres, Moscou et Le Caire tombent dans leur pays.
+La carte du scénario WW2+ (`server/data/scenarios/hoi4-states-copy-copy-2/`) venait d'une image de HOI4 étalée entre 65° S et 65° N : Paris tombait en mer et Berlin en Suède. `scripts/hoi-georeference.mjs` la recale sur les frontières actuelles de la carte de base, en trois temps :
+
+1. une cinquantaine de pays au territoire stable depuis 1936, mesurés en cinq points (centre, bords) : polynôme de degré 3 ;
+2. une correction locale par pays (gaussienne, σ = 5°) ;
+3. un affinage par les **côtes** et les **frontières restées les mêmes depuis 1936** (États-Unis–Canada, France–Suisse, Espagne–Portugal…) : 12 passes où chaque point de côte ou de frontière du scénario est tiré vers le même genre de point sur la carte réelle, lissées en un champ de correction (σ = 1°).
+
+Vérification sur 43 villes du monde entier : 39 tombent dans leur pays ; les 4 autres sont à moins de 12 km du leur, là où les contours en pixels de HOI4 s'écartent de la réalité (Istanbul et Rio de Janeiro au bord de l'eau, Montréal et Toronto contre la frontière). Écart moyen restant aux côtes : 0,16°. Relancer le script repart toujours des contours d'origine.
 
 ```bash
 node --max-old-space-size=6144 scripts/hoi-georeference.mjs hoi4-states-copy-copy-2           # mesure seulement
@@ -151,7 +160,20 @@ node --max-old-space-size=6144 scripts/hoi-georeference.mjs hoi4-states-copy-cop
 
 Copies d'origine, à côté des fichiers : `regions.geojson.avant-recalage-2026-09-25T12-26-55-267Z`, `regions.coarse.geojson.avant-recalage-…` et `regions.coarse.geojson.stamp.avant-recalage-…`. Pour revenir en arrière, les renommer sans le suffixe.
 
-Au chargement d'une partie, un bâtiment qui ne tombe pas sur une terre de son propriétaire est ramené au point le plus proche de son territoire (`snapHoiBuildingsToTerritory` dans `gameplay.js`).
+Au chargement d'une partie, un complexe industriel de départ revient aux vraies coordonnées de son bassin si ce point est chez son pays ; tout autre bâtiment qui ne tombe pas sur une terre de son propriétaire est ramené au point le plus proche de son territoire (`snapHoiBuildingsToTerritory` dans `gameplay.js`).
+
+### Dans le jeu
+
+- **Carte** (`src/Game/Map/ProvincesLayer.jsx`) : les limites des provinces, fines, à partir du zoom 5, sous les frontières des États. Chargées une fois par partie (`hoiProvinceStore.js`).
+- **Propriétaire** : celui de la région, changements de la partie compris (`regionOwnershipOverrides`) ; un transfert de région par l'IA emporte donc ses provinces.
+- **Construction** : le site d'un chantier est une province du joueur, choisie dans la liste (nom · emplacements pris/total) ou avec « Choisir sur la carte » : ses provinces s'éclairent, celle sous la souris aussi, un clic la choisit, Échap annule. Sous la liste : terrain, emplacements libres, côte.
+- **Emplacements** (`src/runtime/hoi/provinces.js`) : usines, aciéries, raffineries et mines en prennent un par niveau (un chantier compte déjà) ; le complexe de départ en prend un ; forts, radars, aérodromes et ports aucun. Une province pleine refuse une usine neuve ou un agrandissement ; un port demande une province côtière. Les bâtiments déjà en trop restent.
+- **Fiche d'un bâtiment** : sa province, son terrain, ses emplacements pris.
+
+### Performances
+
+- Découpage en tuiles par la carte (MapLibre, fait une fois, dans un fil à part) : environ 0,1 s pour les 7 000 provinces ; une vue de la France à zoom 6, environ 13 000 points de contour.
+- Quatre fois plus fin (≈ 2 500 km²) : 0,27 s et 53 000 points, sans souci pour l'affichage. La limite est plutôt le fichier (8,5 Mo aujourd'hui, environ 34 Mo quatre fois plus fin), chargé à l'ouverture de la partie. Deux fois plus fin reste raisonnable : `targetKm2: 5000` dans `PROVINCE_TUNING`.
 
 ## Vérifier chez soi
 
@@ -165,7 +187,8 @@ npm run dev                             # lancer le jeu
 ## Limites connues
 
 - Les forts, radars, aérodromes et ports n'ont pas encore d'effet en jeu : leur niveau est seulement lu par l'IA, en attendant les armées et les fronts.
-- Le lieu d'un chantier se choisit dans une liste ; le clic sur la carte viendra avec sa refonte visuelle.
+- Les emplacements ne bornent que les chantiers du joueur : ceux que l'IA lance passent encore sans vérification.
+- Les provinces n'existent que sur les scénarios à régions en GeoJSON (WW2+) ; la carte de base garde la liste de sites.
 - Sur une carte dont le scénario ne fournit pas ses villes (tuiles vectorielles), la liste des sites se limite aux bassins industriels du pays et à ses propres structures.
 - Un changement de propriétaire d'une région ne transfère pas encore les bâtiments qui s'y trouvent.
 - Les opérations du Game Master ne passent pas par `economyOps`.

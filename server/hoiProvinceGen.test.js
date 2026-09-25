@@ -69,3 +69,24 @@ test("carte entière : l'eau n'a pas de provinces, les côtes et les voisinages 
   assert.equal(a.properties.coastal, false);
   assert.match(a.properties.id, /^A#1$/);
 });
+
+test("un nom de région en code couleur est remplacé par une ville, et les noms restent uniques", () => {
+  const regions = {
+    type: "FeatureCollection",
+    features: [
+      feature("R1", square(0, 0, 1), { name: "Province #114499", owner: "France" }),
+      feature("R2", square(1, 0, 1), { name: "Province #2233EE", owner: "France" }),
+      feature("R3", square(5, 0, 1), { name: "Bourgogne" }),
+    ],
+  };
+  const cities = [{ name: "Dijon", coordinates: [0.5, 0.5], population: 100000 }];
+  const { provinces } = generateProvinces(regions, { cities });
+  const names = provinces.features.map((entry) => entry.properties.name);
+  assert.ok(names.includes("Dijon"), "la province de la ville porte son nom");
+  assert.ok(names.every((name) => !name.includes("#")), names.join(", "));
+  assert.ok(names.includes("Bourgogne"), "un vrai nom de région est gardé");
+  assert.ok(names.some((name) => /^Dijon – \d$/.test(name)), "la région sans ville prend la ville la plus proche, numérotée");
+  assert.equal(new Set(names).size, names.length, "noms uniques");
+  assert.equal(provinces.features.find((entry) => entry.properties.regionId === "R1").properties.owner, "France");
+  assert.ok(provinces.features.every((entry) => entry.properties.regionId !== "R1" || Array.isArray(entry.properties.anchor)), "la province-ville a son point");
+});

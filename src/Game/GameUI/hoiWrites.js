@@ -48,6 +48,8 @@ export const HOI_WRITE_ERRORS = Object.freeze({
   "unknown-nation": "Your country has no tracked economy.",
   "unknown-type": "Unknown building type.",
   "type-locked": "This building type needs a technology first.",
+  "no-slot": "No free building slot left in this province.",
+  "not-coastal": "A port needs a coastal province.",
   "already-building": "Already under construction.",
   "max-level": "Already at its highest level.",
   "not-upgradable": "An industrial complex cannot be enlarged; build a factory beside it.",

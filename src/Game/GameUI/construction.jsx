@@ -2,8 +2,9 @@
 //
 // Pour le pays du joueur : sa capacité de construction, sa file de chantiers
 // (monter, descendre, annuler), ses bâtiments à agrandir, et un formulaire pour
-// bâtir sur un site : une de ses villes ou une de ses structures. Le clic sur la
-// carte viendra avec sa refonte visuelle. Les écritures passent par
+// bâtir dans une de ses provinces (phase 4), choisie dans la liste ou sur la
+// carte, avec ses emplacements. Sans provinces (carte de base), les sites sont
+// ses villes et ses structures. Les écritures passent par
 // runtime/hoi/constructionOps.js et hoiWrites.js.
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -17,11 +18,15 @@ import {
   describeBuildingEffect,
 } from "../../runtime/hoi/buildings.js";
 import { cancelConstruction, moveInQueue, queueNewBuilding, queueUpgrade } from "../../runtime/hoi/constructionOps.js";
+import { ownedProvinces, provinceSiteError, provinceUsage } from "../../runtime/hoi/provinces.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { TERRAIN_LABELS } from "../../../server/hoiTerrain.js";
+import { cancelProvincePick, setSelectedProvince, startProvincePick, useHoiProvinces } from "../Map/hoiProvinceStore.js";
 import { HOI_WRITE_ERRORS, updateHoiWorld } from "./hoiWrites.js";
 
 const selectMarkers = (world) => (Array.isArray(world?.markers) ? world.markers : []);
 const selectDate = (game) => String(game?.gameDate ?? "");
+const selectOwnershipOverrides = (world) => world?.regionOwnershipOverrides ?? null;
 
 const muted = "rgba(255,255,255,0.5)";
 
@@ -61,20 +66,43 @@ export const ConstructionSection = ({ hoi, playerKey, nation }) => {
   const [sites, setSites] = useState(null);
   const [type, setType] = useState("");
   const [siteIndex, setSiteIndex] = useState(0);
+  const [provinceId, setProvinceId] = useState("");
   const [resource, setResource] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
 
-  // Les sites viennent de la carte (villes par région possédée) : chargés une
-  // fois à l'ouverture, et rechargés quand les structures du joueur changent.
+  // Les provinces du joueur (phase 4), avec les emplacements déjà pris.
+  const overrides = useRuntimeState("world", selectOwnershipOverrides);
+  const { index: provinceIndex, pick } = useHoiProvinces();
+  const usage = useMemo(() => provinceUsage(provinceIndex, markers), [provinceIndex, markers]);
+  const provinces = useMemo(
+    () => ownedProvinces(provinceIndex, { hoi, regionOwnershipOverrides: overrides }, playerKey),
+    [provinceIndex, hoi, overrides, playerKey],
+  );
+  const useProvinces = provinces.length > 0;
+  // Par défaut : la province du premier complexe industriel du joueur.
+  const homeProvinceId = useMemo(() => {
+    const complex = markers.find((marker) => marker.building?.type === "complexe_industriel" && findNationKey(hoi, marker.ownerCode) === playerKey);
+    return complex ? usage.provinceOf.get(String(complex.id)) : null;
+  }, [markers, hoi, playerKey, usage]);
+  const province = provinces.find((entry) => entry.id === provinceId)
+    ?? provinces.find((entry) => entry.id === homeProvinceId) ?? provinces[0] ?? null;
+  const provinceSite = (entry) => (entry ? { ...entry.properties, used: usage.used.get(entry.id) ?? 0 } : null);
+  const chosenProvince = provinceSite(province);
+  useEffect(() => { setSelectedProvince(province?.id ?? null); }, [province?.id]);
+  useEffect(() => () => { cancelProvincePick(); setSelectedProvince(null); }, []);
+
+  // Sans provinces : les sites viennent de la carte (villes par région
+  // possédée), chargés à l'ouverture et rechargés quand les structures changent.
   const ownedCount = markers.filter((marker) => findNationKey(hoi, marker.ownerCode) === playerKey).length;
   useEffect(() => {
+    if (useProvinces) return undefined;
     let alive = true;
     listHoiBuildSites()
       .then((list) => { if (alive) setSites(list); })
       .catch(() => { if (alive) setSites([]); });
     return () => { alive = false; };
-  }, [ownedCount]);
+  }, [ownedCount, useProvinces]);
 
   const owned = useMemo(
     () => markers.filter((marker) => marker.building && findNationKey(hoi, marker.ownerCode) === playerKey),
@@ -109,7 +137,15 @@ export const ConstructionSection = ({ hoi, playerKey, nation }) => {
     }
   };
 
-  const site = sites?.[Math.min(siteIndex, Math.max(0, (sites?.length ?? 1) - 1))] ?? null;
+  const listSite = sites?.[Math.min(siteIndex, Math.max(0, (sites?.length ?? 1) - 1))] ?? null;
+  const site = useProvinces
+    ? (chosenProvince?.anchor ? { name: chosenProvince.name, lng: chosenProvince.anchor[0], lat: chosenProvince.anchor[1] } : null)
+    : listSite;
+  const siteError = useProvinces && chosenType ? provinceSiteError(chosenProvince, chosenType, chosenProvince?.used) : null;
+  const markerProvince = (marker) => {
+    const id = usage.provinceOf.get(String(marker.id));
+    return id ? provinceSite(provinceIndex.byId.get(id)) : null;
+  };
 
   return (
     <div>
@@ -182,25 +218,49 @@ export const ConstructionSection = ({ hoi, playerKey, nation }) => {
           )}
         </div>
         <div style={{ display: "flex", gap: "0.35rem" }}>
-          <select
-            aria-label="Site"
-            value={String(Math.min(siteIndex, Math.max(0, (sites?.length ?? 1) - 1)))}
-            onChange={(event) => setSiteIndex(Number(event.target.value))}
-            disabled={!sites?.length}
-            style={{ ...selectStyle, flex: 1 }}
-          >
-            {sites === null && <option>Loading your cities…</option>}
-            {sites?.length === 0 && <option>No city found for your country</option>}
-            {(sites ?? []).map((entry, index) => (
-              <option key={`${entry.source}-${entry.name}-${index}`} value={index} style={{ background: "#18181b" }} data-no-translate>
-                {entry.name}{entry.source === "marker" ? " (structure)" : ""}
-              </option>
-            ))}
-          </select>
+          {useProvinces ? (
+            <select
+              aria-label="Province"
+              value={province?.id ?? ""}
+              onChange={(event) => setProvinceId(event.target.value)}
+              style={{ ...selectStyle, flex: 1 }}
+            >
+              {provinces.map((entry) => (
+                <option key={entry.id} value={entry.id} style={{ background: "#18181b" }} data-no-translate>
+                  {entry.properties.name} · {usage.used.get(entry.id) ?? 0}/{entry.properties.slots}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              aria-label="Site"
+              value={String(Math.min(siteIndex, Math.max(0, (sites?.length ?? 1) - 1)))}
+              onChange={(event) => setSiteIndex(Number(event.target.value))}
+              disabled={!sites?.length}
+              style={{ ...selectStyle, flex: 1 }}
+            >
+              {sites === null && <option>Loading your cities…</option>}
+              {sites?.length === 0 && <option>No city found for your country</option>}
+              {(sites ?? []).map((entry, index) => (
+                <option key={`${entry.source}-${entry.name}-${index}`} value={index} style={{ background: "#18181b" }} data-no-translate>
+                  {entry.name}{entry.source === "marker" ? " (structure)" : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          {useProvinces && (
+            <button
+              type="button"
+              style={smallButton(Boolean(pick))}
+              onClick={() => (pick ? cancelProvincePick() : startProvincePick({ playerKey, onPick: (entry) => setProvinceId(entry.id) }))}
+            >
+              {pick ? "Cancel" : "Pick on map"}
+            </button>
+          )}
           <button
             type="button"
-            disabled={pending || !site || !chosenType}
-            style={smallButton(true, pending || !site || !chosenType)}
+            disabled={pending || !site || !chosenType || Boolean(siteError)}
+            style={smallButton(true, pending || !site || !chosenType || Boolean(siteError))}
             onClick={() => act((world) => queueNewBuilding(world, {
               polity: playerKey,
               type: chosenType,
@@ -208,11 +268,24 @@ export const ConstructionSection = ({ hoi, playerKey, nation }) => {
               resource: chosenType === "mine" ? chosenResource : null,
               date: gameDate,
               id: newId(),
+              province: useProvinces ? chosenProvince : null,
             }))}
           >
             Build
           </button>
         </div>
+        {pick && (
+          <div style={{ color: "#facc15", fontSize: "0.68rem" }}>Click one of your provinces on the map (Esc to cancel).</div>
+        )}
+        {useProvinces && chosenProvince && (
+          <div style={{ color: muted, fontSize: "0.66rem" }}>
+            <span data-no-translate>{TERRAIN_LABELS[chosenProvince.terrain] ?? chosenProvince.terrain}</span>
+            {" · "}<span data-no-translate>{Math.max(0, chosenProvince.slots - chosenProvince.used)}</span> of{" "}
+            <span data-no-translate>{chosenProvince.slots}</span> building slots free
+            {chosenProvince.coastal ? " · coastal" : ""}
+            {siteError && <span style={{ color: "#fbbf24" }}> · {HOI_WRITE_ERRORS[siteError]}</span>}
+          </div>
+        )}
       </div>
 
       {upgradable.length > 0 && (
@@ -226,7 +299,7 @@ export const ConstructionSection = ({ hoi, playerKey, nation }) => {
                   <span data-no-translate style={{ color: muted }}> · {marker.building.level}/{HOI_BUILDING_TYPES[marker.building.type].maxLevel} · {describeBuildingEffect(marker.building)}</span>
                 </span>
                 <button type="button" disabled={pending} style={smallButton(false, pending)}
-                  onClick={() => act((world) => queueUpgrade(world, { polity: playerKey, markerId: marker.id }))}>
+                  onClick={() => act((world) => queueUpgrade(world, { polity: playerKey, markerId: marker.id, province: markerProvince(marker) }))}>
                   +1
                 </button>
               </div>

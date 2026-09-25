@@ -5,6 +5,10 @@ import { useMap } from "react-map-gl/maplibre";
 import { useWorldState } from "../Map/useWorldState.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { HOI_BUILDING_TYPES, describeBuildingEffect } from "../../runtime/hoi/buildings.js";
+import { provinceAt, provinceUsage } from "../../runtime/hoi/provinces.js";
+import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { TERRAIN_LABELS } from "../../../server/hoiTerrain.js";
+import { useHoiProvinces } from "../Map/hoiProvinceStore.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -117,6 +121,25 @@ const Bar = ({ value, color }) => (
     <div style={{ background: color, height: "100%", width: `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%` }} />
   </div>
 );
+
+// Couche HOI4, phase 4 : la province d'une structure, son terrain et ses
+// emplacements de construction pris.
+const selectMarkers = (world) => (Array.isArray(world?.markers) ? world.markers : []);
+const ProvinceRow = ({ feature }) => {
+  const { index } = useHoiProvinces();
+  const markers = useRuntimeState("world", selectMarkers);
+  if (!index) return null;
+  const entry = (feature.provinceId && index.byId.get(String(feature.provinceId))) || provinceAt(index, [feature.lng, feature.lat]);
+  if (!entry) return null;
+  const used = provinceUsage(index, markers).used.get(entry.id) ?? 0;
+  const { name, terrain, slots } = entry.properties;
+  return (
+    <DetailRow
+      label="Province"
+      value={<span data-no-translate>{name} · {TERRAIN_LABELS[terrain] ?? terrain} · {used}/{slots}</span>}
+    />
+  );
+};
 
 // Couche HOI4, phase 3 : les stats qu'un bâtiment tient du moteur
 // (runtime/hoi/buildings.js) — type, niveau, effet, état, chantier.
@@ -336,6 +359,7 @@ const FeaturePopup = () => {
           {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
             <DetailRow label="Last changed" value={feature.updatedDate} />
           ) : null}
+          {!isCity ? <ProvinceRow feature={feature} /> : null}
           {!isCity && feature.building ? <BuildingDetails building={feature.building} /> : null}
           <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
           {feature.note ? (

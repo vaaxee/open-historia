@@ -37,6 +37,7 @@ import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runti
 import { useWorldState } from "./useWorldState.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
+import { getHoiProvinceState } from "./hoiProvinceStore.js";
 import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
@@ -1071,6 +1072,8 @@ const WorldMap = ({ isGlobe = false }) => {
     ? curvedLabelData
     : EMPTY_FEATURE_COLLECTION;
   const handleRegionClick = useCallback(async (event) => {
+    // Couche HOI4 : pendant « Choisir sur la carte », le clic est pour la province.
+    if (getHoiProvinceState().pick) return;
     const unitsAt = () =>
       map.getLayer("units-fill")
         ? map.queryRenderedFeatures(event.point, { layers: ["units-fill"] })

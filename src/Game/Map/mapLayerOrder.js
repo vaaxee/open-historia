@@ -24,6 +24,12 @@ export const MAP_LAYER_ORDER = [
   "custom-regions-repair-local-outline",
   "custom-regions-disputed-vnext",
 
+  // Couche HOI4 : les provinces, sous les frontières des États.
+  "hoi-provinces-pick-fill",
+  "hoi-provinces-outline",
+  "hoi-provinces-pick-outline",
+  "hoi-provinces-selected",
+
   // Sovereign frontiers are presentation, but must remain above every
   // political fill and below every semantic object/label layer.
   "polity-boundaries-shadow",

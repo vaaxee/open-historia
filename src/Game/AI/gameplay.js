@@ -15244,14 +15244,30 @@ const snapHoiBuildingsToTerritory = async (world) => {
   const rows = context.rows.filter((row) => row.geometry && row.bbox && row.owner);
   const center = (row) => [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2];
   const moved = [];
+  const ownerKeyAt = (point) => {
+    const here = rows.find((row) => point[0] >= row.bbox[0] && point[0] <= row.bbox[2]
+      && point[1] >= row.bbox[1] && point[1] <= row.bbox[3] && pointInGeometry(point, row.geometry));
+    return here ? findNationKey(world.hoi, here.owner) : null;
+  };
   const next = markers.map((marker) => {
     if (!marker?.building) return marker;
     const key = findNationKey(world.hoi, marker.ownerCode);
     if (!key) return marker;
+    // Un complexe de départ revient au vrai bassin industriel dont il porte le
+    // nom, si ce point est sur la terre de son pays (la carte a pu être recalée
+    // après son installation).
+    if (marker.building.type === "complexe_industriel") {
+      const basin = findIndustrialSites(world.hoi.series, key)
+        .find((entry) => normalizeString(marker.name).endsWith(entry.name));
+      if (basin && ownerKeyAt(basin.coordinates) === key) {
+        const [lng, lat] = basin.coordinates;
+        if (marker.lng === lng && marker.lat === lat) return marker;
+        moved.push(marker.name);
+        return { ...marker, lng, lat };
+      }
+    }
     const point = [marker.lng, marker.lat];
-    const here = rows.find((row) => point[0] >= row.bbox[0] && point[0] <= row.bbox[2]
-      && point[1] >= row.bbox[1] && point[1] <= row.bbox[3] && pointInGeometry(point, row.geometry));
-    if (here && findNationKey(world.hoi, here.owner) === key) return marker;
+    if (ownerKeyAt(point) === key) return marker;
     const owned = rows.filter((row) => findNationKey(world.hoi, row.owner) === key);
     if (!owned.length) return marker;
     const nearest = owned.reduce((best, row) => {

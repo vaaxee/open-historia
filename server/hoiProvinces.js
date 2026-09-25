@@ -114,7 +114,14 @@ export const ensureActiveProvinces = () => {
     });
     feature.properties.terrain = terrain;
     feature.properties.slots = provinceSlots(terrain, feature.properties.population);
-    feature.properties.center = [Math.round(lng * 1e4) / 1e4, Math.round(lat * 1e4) / 1e4];
+    // Le point où l'on bâtit : la ville, sinon le point de la grille le plus
+    // proche du centre (toujours dans la province, même biscornue).
+    if (!feature.properties.anchor) {
+      const inside = points.reduce((best, point) => (
+        (point[0] - lng) ** 2 + (point[1] - lat) ** 2 < (best[0] - lng) ** 2 + (best[1] - lat) ** 2 ? point : best
+      ), points[0]);
+      feature.properties.anchor = inside.map((value) => Math.round(value * 1e4) / 1e4);
+    }
     if (elevation) feature.properties.elevation = elevation.mean;
     terrains[terrain] = (terrains[terrain] ?? 0) + 1;
   }
