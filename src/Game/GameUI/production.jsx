@@ -13,10 +13,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { applyEconomyOps } from "../../runtime/hoi/economyOps.js";
-import { findNationKey } from "../../runtime/hoi/engine.js";
+import { effectiveFactories, findNationKey } from "../../runtime/hoi/engine.js";
 import { HOI_SERIES } from "../../runtime/hoi/presets.js";
 import { getEquipmentSpec, unlockedEquipment } from "../../runtime/hoi/techTree.js";
 import { HOI_WRITE_ERRORS, updateHoiLayer } from "./hoiWrites.js";
+import { ConstructionSection } from "./construction.jsx";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -120,7 +121,9 @@ const ProductionPanel = ({ isOpen, onClose }) => {
   const [message, setMessage] = useState("");
   const [newEquipment, setNewEquipment] = useState("");
   const usedFactories = (nation?.lines ?? []).reduce((sum, line) => sum + line.factories, 0);
-  const freeFactories = Math.max(0, (nation?.factories?.military ?? 0) - usedFactories);
+  // Usines des bâtiments comprises (phase 3), arrondies comme le fait economyOps.
+  const factories = nation ? effectiveFactories(nation) : { civilian: 0, military: 0 };
+  const freeFactories = Math.max(0, Math.floor(factories.military) - usedFactories);
   const openable = editable
     ? unlockedEquipment(hoi, nation).filter((id) => !(nation.lines ?? []).some((line) => line.equipment === id))
     : [];
@@ -219,8 +222,8 @@ const ProductionPanel = ({ isOpen, onClose }) => {
           <>
             <Section title="Factories">
               <div style={{ display: "flex", gap: "1.25rem", fontSize: "0.9rem" }}>
-                <span><strong data-no-translate>{nation.factories?.civilian ?? 0}</strong> <span style={{ color: muted }}>civilian</span></span>
-                <span><strong data-no-translate>{nation.factories?.military ?? 0}</strong> <span style={{ color: muted }}>military</span></span>
+                <span><strong data-no-translate>{formatNumber(factories.civilian)}</strong> <span style={{ color: muted }}>civilian</span></span>
+                <span><strong data-no-translate>{formatNumber(factories.military)}</strong> <span style={{ color: muted }}>military</span></span>
               </div>
             </Section>
 
@@ -340,6 +343,12 @@ const ProductionPanel = ({ isOpen, onClose }) => {
                 </div>
               )}
             </Section>
+
+            {editable && (
+              <Section title="Construction">
+                <ConstructionSection hoi={hoi} playerKey={playerKey} nation={nation} />
+              </Section>
+            )}
 
             <Section title="Active modifiers">
               {(nation.modifiers ?? []).length === 0 ? <Empty>None.</Empty> : (

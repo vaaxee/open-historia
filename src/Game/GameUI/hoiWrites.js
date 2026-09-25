@@ -21,6 +21,18 @@ export const updateHoiLayer = async (mutate) => {
   return { ok: true, error: null, notes: result.notes ?? [] };
 };
 
+// Phase 3 : une écriture qui touche aussi les structures de la carte (un chantier
+// est une structure). `mutate(world)` renvoie { world } ou { error }.
+export const updateHoiWorld = async (mutate) => {
+  if (isSimulationBusy()) return { ok: false, error: "busy" };
+  const world = await readWorldState({ force: true });
+  if (!world?.hoi) return { ok: false, error: "no-hoi" };
+  const result = mutate(world) ?? {};
+  if (result.error || !result.world) return { ok: false, error: result.error || "unchanged" };
+  await writeWorldState(result.world);
+  return { ok: true, error: null };
+};
+
 // Ce qu'un refus veut dire, pour le joueur.
 export const HOI_WRITE_ERRORS = Object.freeze({
   busy: "A time skip is running; try again once it ends.",
@@ -34,4 +46,10 @@ export const HOI_WRITE_ERRORS = Object.freeze({
   queued: "Already queued.",
   "unknown-tech": "Unknown technology.",
   "unknown-nation": "Your country has no tracked economy.",
+  "unknown-type": "Unknown building type.",
+  "type-locked": "This building type needs a technology first.",
+  "already-building": "Already under construction.",
+  "max-level": "Already at its highest level.",
+  "not-upgradable": "An industrial complex cannot be enlarged; build a factory beside it.",
+  "no-site": "Pick a place to build.",
 });

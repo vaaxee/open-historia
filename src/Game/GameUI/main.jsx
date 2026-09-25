@@ -315,14 +315,18 @@ const Main = ({
     let timer = null;
     // L'arbre d'abord, puis les bâtiments (phase 3) : deux installations uniques,
     // chacune sans effet sur une partie ordinaire ou déjà équipée.
-    const attempt = () => {
-      ensureHoiTechTree({ gameId })
-        .then(async (tree) => {
-          const buildings = await ensureHoiBuildings().catch(() => null);
-          const busy = tree?.status === "busy" || buildings?.status === "busy";
-          if (!stopped && busy) timer = setTimeout(attempt, 30000);
-        })
-        .catch(() => {});
+    // Indépendantes : un échec de l'arbre n'empêche pas les bâtiments.
+    const attempt = async () => {
+      const tree = await ensureHoiTechTree({ gameId }).catch((error) => {
+        logDebugEvent("hoi", "Tech tree bootstrap failed.", { error: String(error?.message || error) });
+        return null;
+      });
+      const buildings = await ensureHoiBuildings({ gameId }).catch((error) => {
+        logDebugEvent("hoi", "Buildings bootstrap failed.", { error: String(error?.message || error) });
+        return null;
+      });
+      const busy = tree?.status === "busy" || buildings?.status === "busy";
+      if (!stopped && busy) timer = setTimeout(attempt, 30000);
     };
     timer = setTimeout(attempt, 5000);
     return () => {

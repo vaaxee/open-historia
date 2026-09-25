@@ -39,6 +39,7 @@ import { advanceResearch, emptyResearchReport, normalizeBonuses, normalizeResear
 import {
   HOI_BUILDING_TYPES,
   advanceConstruction,
+  planAutoConstruction,
   statusForBuilding,
   sumContributions,
   syncBuildingsWithMarkers,
@@ -364,7 +365,22 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
       nation = { ...nation, buildingBonus: bonus };
       const result = advanceNation(nation, step, { date: stepDate, bonus });
       const research = advanceResearch(result.nation, step, { date: stepDate, tree, auto: polity !== playerKey });
-      const construction = advanceConstruction(buildings, research.nation.constructionQueue, step, {
+      // Pays gérés par le moteur, sans chantier : il en lance un (agrandir une
+      // usine, ou en bâtir une à côté d'un complexe). Seulement une fois les
+      // bâtiments installés.
+      let queue = research.nation.constructionQueue;
+      if (polity !== playerKey && !queue.length && world.hoi.buildingsInstalled) {
+        const factories = effectiveFactories(research.nation, bonus);
+        const plan = planAutoConstruction(buildings, {
+          civilian: factories.civilian,
+          military: factories.military,
+          date: stepDate,
+          makeId: (type, count) => `hoi-auto-${String(polity).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${type}-${count + 1}`,
+        });
+        buildings = plan.owned;
+        queue = plan.queue;
+      }
+      const construction = advanceConstruction(buildings, queue, step, {
         effectiveCivilian: effectiveFactories(research.nation, bonus).civilian,
         auto: polity !== playerKey,
       });
@@ -376,7 +392,10 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
     // Le relevé final, et l'état affiché de chaque structure.
     nation = { ...nation, buildingBonus: sumContributions(buildings.map((entry) => entry.marker.building)) };
     for (const { index, marker } of buildings) {
-      markers[index] = { ...marker, status: statusForBuilding(marker.building, marker.status) };
+      const next = { ...marker, status: statusForBuilding(marker.building, marker.status) };
+      // index −1 : un chantier lancé par le moteur pendant ce saut, nouveau sur la carte.
+      if (index < 0) markers.push(next);
+      else markers[index] = next;
     }
     nations[polity] = nation;
     reports[polity] = report;
@@ -413,7 +432,9 @@ const buildOtherNationsLines = (world, playerKey, limit) => {
     .map(([key, nation]) => ({
       key,
       nation,
-      weight: num(nation?.factories?.civilian) + num(nation?.factories?.military),
+      // Usines des bâtiments comprises (phase 3) : après l'installation, les
+      // usines abstraites des grands pays sont à zéro.
+      weight: effectiveFactories(normalizeNation(nation)).civilian + effectiveFactories(normalizeNation(nation)).military,
     }))
     .sort((a, b) => b.weight - a.weight || a.key.localeCompare(b.key))
     .slice(0, limit)
@@ -424,7 +445,8 @@ const buildOtherNationsLines = (world, playerKey, limit) => {
         .map((entry) => `${entry.equipment} ${entry.factories}`)
         .join(", ");
       const techs = world.hoi.tech?.tree ? (nation.research?.done ?? []).length : 0;
-      return `- ${key} : ${num(nation.factories?.civilian)} civiles / ${num(nation.factories?.military)} militaires`
+      const factories = effectiveFactories(normalizeNation(nation));
+      return `- ${key} : ${factories.civilian} civiles / ${factories.military} militaires`
         + (lines ? ` (lignes : ${lines})` : "")
         + (techs ? `, ${techs} techs` : "")
         + (shortages.length ? ` — pénurie de ${shortages.join(", ")}` : "")
@@ -464,9 +486,8 @@ const buildBuildingPromptLines = (world, key, nation, report) => {
   if (!world.hoi?.buildingsInstalled) return [];
   const owned = (Array.isArray(world.markers) ? world.markers : [])
     .filter((marker) => marker?.building && findNationKey(world.hoi, marker.ownerCode) === key);
-  const effective = effectiveFactories(nation);
-  const out = [`Usines effectives (bâtiments compris) : ${effective.civilian} civiles, ${effective.military} militaires.`];
-  if (!owned.length) return [...out, "Bâtiments : aucun sur la carte."];
+  const out = [];
+  if (!owned.length) return ["Bâtiments : aucun sur la carte."];
   const counts = new Map();
   for (const marker of owned) {
     const label = HOI_BUILDING_TYPES[marker.building.type]?.label ?? marker.building.type;
@@ -491,7 +512,8 @@ export const buildEconomyPromptBlock = (world, polity, { others = 0 } = {}) => {
   const report = world.hoi.lastReport?.nations?.[key];
   const lines = [`[ÉCONOMIE — ${key}]`];
   lines.push(`Stocks : ${Object.entries(nation.stocks).map(([k, v]) => `${k} ${v}`).join(", ") || "aucun"}.`);
-  lines.push(`Usines : ${nation.factories.civilian} civiles, ${nation.factories.military} militaires.`);
+  const factories = effectiveFactories(normalizeNation(nation));
+  lines.push(`Usines : ${factories.civilian} civiles, ${factories.military} militaires${world.hoi.buildingsInstalled ? " (bâtiments compris)" : ""}.`);
   const production = (Array.isArray(nation.lines) ? nation.lines : [])
     .map((entry) => `${entry.equipment} [id ${entry.id}] ${entry.factories} usines, efficacité ${Math.round(entry.efficiency * 100)} %`)
     .join(" ; ");

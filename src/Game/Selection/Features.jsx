@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { useWorldState } from "../Map/useWorldState.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { HOI_BUILDING_TYPES, describeBuildingEffect } from "../../runtime/hoi/buildings.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -41,6 +42,10 @@ export const dismissFeaturePopup = () => {
 
 // DOM-side emoji per kind (the on-map glyphs are font-limited; the popup isn't).
 const KIND_EMOJI = [
+  // Couche HOI4 : les types de bâtiments, en français (runtime/hoi/buildings.js).
+  [/complexe industriel|usine|aciérie|raffinerie/, "🏭"],
+  [/^mine$/, "⛏"],
+  [/aérodrome/, "✈"],
   [/city|town|settlement|metropolis|capital/, "🏙"],
   [/military base|army base|fort|fortress|barracks|garrison|outpost|citadel|castle/, "🏰"],
   [/bunker|shelter/, "🛡"],
@@ -106,6 +111,45 @@ const DetailRow = ({ label, value }) => (
     <span style={{ color: "rgba(255,255,255,0.9)", textAlign: "right", wordBreak: "break-word" }}>{value}</span>
   </div>
 );
+
+const Bar = ({ value, color }) => (
+  <div style={{ background: "rgba(255,255,255,0.1)", borderRadius: 999, height: 4, marginTop: "3px", overflow: "hidden" }}>
+    <div style={{ background: color, height: "100%", width: `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%` }} />
+  </div>
+);
+
+// Couche HOI4, phase 3 : les stats qu'un bâtiment tient du moteur
+// (runtime/hoi/buildings.js) — type, niveau, effet, état, chantier.
+const BuildingDetails = ({ building }) => {
+  const spec = HOI_BUILDING_TYPES[building.type];
+  if (!spec) return null;
+  const condition = Number(building.condition ?? 100);
+  const construction = building.construction;
+  const conditionColor = condition <= 0 ? "#ef4444" : condition < 100 ? "#f59e0b" : "#4ade80";
+  return (
+    <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 0 4px", paddingTop: "4px" }}>
+      <DetailRow label="Building" value={<span data-no-translate>{spec.label}</span>} />
+      <DetailRow label="Level" value={<span data-no-translate>{building.level} / {spec.maxLevel}</span>} />
+      <DetailRow label="Effect" value={<span data-no-translate>{describeBuildingEffect(building)}</span>} />
+      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", marginTop: "3px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span>Condition</span>
+          <span data-no-translate style={{ color: conditionColor }}>{Math.round(condition)}%</span>
+        </div>
+        <Bar value={condition / 100} color={conditionColor} />
+      </div>
+      {construction ? (
+        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", marginTop: "5px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span>{construction.kind === "upgrade" ? "Upgrading to level" : "Under construction, level"} <span data-no-translate>{construction.targetLevel}</span></span>
+            <span data-no-translate>{Math.min(99, Math.round((construction.progress / construction.cost) * 100))}%</span>
+          </div>
+          <Bar value={construction.progress / construction.cost} color="#60a5fa" />
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 const FeaturePopup = () => {
   const [selection, setSelection] = useState(null);
@@ -292,6 +336,7 @@ const FeaturePopup = () => {
           {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
             <DetailRow label="Last changed" value={feature.updatedDate} />
           ) : null}
+          {!isCity && feature.building ? <BuildingDetails building={feature.building} /> : null}
           <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
           {feature.note ? (
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,255,255,0.75)" }}>

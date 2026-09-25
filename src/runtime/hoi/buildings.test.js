@@ -25,6 +25,7 @@ import {
   isBuildingTypeUnlocked,
   newBuildingMarker,
   normalizeBuilding,
+  planAutoConstruction,
   startConstruction,
   statusForBuilding,
   syncBuildingsWithMarkers,
@@ -210,6 +211,19 @@ test("dans le saut : les complexes font tourner l'économie, le joueur ne choisi
   assert.equal(next.markers.find((m) => m.id === "u1").building.construction, undefined, "le joueur choisit ses chantiers");
   assert.ok(next.markers.find((m) => m.id === "u2").building.construction || next.markers.find((m) => m.id === "u2").building.level === 2,
     "la France, gérée par le moteur, agrandit son usine");
+});
+
+test("un pays géré par le moteur bâtit une usine neuve à côté de son complexe, puis l'agrandit", () => {
+  const complex = { index: 0, marker: { id: "cx", name: "Complexe industriel d'Essen", ownerCode: "Germany", lng: 7, lat: 51.4, building: normalizeBuilding({ type: "complexe_industriel", capacity: { civilian: 20, military: 8 } }) } };
+  const plan = planAutoConstruction([complex], { civilian: 20, military: 8, makeId: (type, count) => `auto-${type}-${count + 1}`, date: "1936-02-01" });
+  assert.equal(plan.created.marker.name, "Usine militaire d'Essen", "8 militaires pour 20 civiles : militaire, avec élision");
+  assert.equal(plan.created.marker.building.construction.targetLevel, 1);
+  assert.deepEqual(plan.queue, ["auto-usine_militaire-1"]);
+  const built = { ...plan.created, marker: { ...plan.created.marker, building: normalizeBuilding({ type: "usine_militaire", level: 1 }) } };
+  const next = planAutoConstruction([complex, built], { civilian: 20, military: 9, makeId: () => "unused" });
+  assert.equal(next.created, null, "il agrandit plutôt que d'en bâtir une autre");
+  assert.equal(next.owned[1].marker.building.construction.targetLevel, 2);
+  assert.equal(planAutoConstruction([], { makeId: () => "x" }).created, null, "sans complexe, rien");
 });
 
 test("economyOps : damage est reconnu, mais laissé à la carte", () => {

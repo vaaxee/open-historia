@@ -16,7 +16,7 @@ import {
 } from "../../runtime/applicationReceipt.js";
 import { advanceHoiLayer, findNationKey, refreshBuildingBonuses } from "../../runtime/hoi/engine.js";
 import { applyEconomyOpsFromEvents } from "../../runtime/hoi/economyOps.js";
-import { HOI_EQUIPMENT, pickHoiSeries } from "../../runtime/hoi/presets.js";
+import { HOI_EQUIPMENT, findIndustrialSites, pickHoiSeries } from "../../runtime/hoi/presets.js";
 import {
   collectHoiResources,
   fallbackTechTree,
@@ -29,6 +29,7 @@ import {
   TECH_GATEABLE_BUILDINGS,
   applyBuildingDamage,
   installBuildings,
+  needsComplexes,
 } from "../../runtime/hoi/buildings.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
@@ -266,7 +267,7 @@ import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { downloadScenarioJsonAsset, getLibraryState } from "../../runtime/library.js";
 import { getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
@@ -15202,11 +15203,30 @@ let hoiBuildingsInFlight = false;
 
 // Les villes de chaque pays suivi, par la même carte que l'IA : une ville
 // appartient au pays qui possède la région où elle se trouve.
+// Un scénario sur tuiles vectorielles (la carte de base) ne garde pas ses villes
+// en JSON : on prend alors celles du scénario par défaut, les grandes villes du
+// monde, rattachées aux régions de cette carte-ci.
+const hoiFallbackCities = async () => {
+  const collection = await downloadScenarioJsonAsset("default", "citiesGeojson").catch(() => null);
+  return normalizeArray(collection?.features)
+    .map((feature) => ({
+      name: normalizeString(feature?.properties?.city || feature?.properties?.name),
+      coordinates: feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null,
+      population: Number(feature?.properties?.population) || 0,
+    }))
+    .filter((city) => city.name && Array.isArray(city.coordinates));
+};
+
 const hoiCitiesByNation = async (world) => {
   const context = await lazyLookupContext({ world })();
+  const cities = context.cityRows.length ? context.cityRows : await hoiFallbackCities();
   const byNation = new Map();
-  for (const city of context.cityRows) {
-    const owner = context.regionOfCity(city)?.owner;
+  for (const city of cities) {
+    // Seulement une ville dans le contour d'une région : le rattachement au
+    // centre le plus proche donnait Kinshasa à la France et Tripoli à l'Allemagne.
+    const placed = context.placeCity(city);
+    if (!placed || placed.approximate) continue;
+    const owner = placed.row?.owner;
     const key = owner ? findNationKey(world.hoi, owner) : null;
     if (!key) continue;
     if (!byNation.has(key)) byNation.set(key, []);
@@ -15218,19 +15238,29 @@ const hoiCitiesByNation = async (world) => {
 const hoiSlug = (value) => normalizeString(value).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
   .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
 
-export const ensureHoiBuildings = async () => {
+// Parties déjà installées pour lesquelles on a retenté les complexes cette session.
+const hoiComplexRetries = new Set();
+
+export const ensureHoiBuildings = async ({ gameId = "" } = {}) => {
   if (hoiBuildingsInFlight || isSimulationBusy()) return { status: "busy" };
   const world = await readWorldState({ force: true });
-  if (!world?.hoi || world.hoi.buildingsInstalled) return { status: "skip" };
+  if (!world?.hoi) return { status: "skip" };
+  // Déjà installée : seulement les complexes qui manquaient (villes inconnues la
+  // première fois), une tentative par session.
+  const retry = Boolean(world.hoi.buildingsInstalled);
+  if (retry && (!needsComplexes(world.hoi.nations) || hoiComplexRetries.has(gameId || "active"))) return { status: "skip" };
+  if (retry) hoiComplexRetries.add(gameId || "active");
   hoiBuildingsInFlight = true;
   try {
-    const cities = await hoiCitiesByNation(world).catch(() => new Map());
     const game = await readGameData({ force: true });
     if (isSimulationBusy()) return { status: "busy" };
     const fresh = await readWorldState({ force: true });
-    if (!fresh?.hoi || fresh.hoi.buildingsInstalled) return { status: "skip" };
+    if (!fresh?.hoi || Boolean(fresh.hoi.buildingsInstalled) !== retry) return { status: "skip" };
     const installed = installBuildings(normalizeArray(fresh.markers), fresh.hoi.nations, {
-      citiesOf: (key) => cities.get(key) ?? [],
+      typeExisting: !retry,
+      // Les vrais bassins industriels des pays détaillés (presets.js) ; les
+      // autres gardent leurs usines abstraites.
+      citiesOf: (key) => findIndustrialSites(fresh.hoi.series, key),
       resolveNation: (owner) => findNationKey(fresh.hoi, owner),
       resources: collectHoiResources(fresh.hoi),
       date: normalizeString(game.gameDate),
@@ -15258,15 +15288,22 @@ export const listHoiBuildSites = async () => {
   const key = findNationKey(world.hoi, toCountryName(normalizeString(game.country)))
     ?? findNationKey(world.hoi, game.country);
   if (!key) return [];
-  const cities = (await hoiCitiesByNation(world).catch(() => new Map())).get(key) ?? [];
+  // Les bassins industriels du pays (presets.js), puis les villes que la carte
+  // situe sans approximation, puis ses propres structures ; un nom une fois.
+  const industrial = findIndustrialSites(world.hoi.series, key)
+    .map((entry) => ({ name: entry.name, lng: entry.coordinates[0], lat: entry.coordinates[1], population: 0, source: "city" }));
+  const cities = ((await hoiCitiesByNation(world).catch(() => new Map())).get(key) ?? [])
+    .map((city) => ({ name: city.name, lng: city.coordinates[0], lat: city.coordinates[1], population: city.population, source: "city" }))
+    .sort((a, b) => b.population - a.population || a.name.localeCompare(b.name));
   const markers = normalizeArray(world.markers)
     .filter((marker) => findNationKey(world.hoi, marker.ownerCode) === key)
     .map((marker) => ({ name: marker.name, lng: marker.lng, lat: marker.lat, population: 0, source: "marker" }));
-  return [
-    ...cities
-      .map((city) => ({ name: city.name, lng: city.coordinates[0], lat: city.coordinates[1], population: city.population, source: "city" }))
-      .sort((a, b) => b.population - a.population || a.name.localeCompare(b.name)),
-    ...markers,
-  ];
+  const seen = new Set();
+  return [...industrial, ...cities, ...markers].filter((entry) => {
+    const name = entry.name.toLowerCase();
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
 };
 

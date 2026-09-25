@@ -1,12 +1,14 @@
 /*! Open Historia — built-structure map layer © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useMemo, useState } from "react";
-import { Source, Layer } from "react-map-gl/maplibre";
+import { Source, Layer, useMap } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
 import {
   getMarkerPresentation,
   MARKER_VISIBILITY_TIER,
 } from "./vnext/presentationPolicy.js";
+import { HOI_BUILDING_TYPES } from "../../runtime/hoi/buildings.js";
+import { buildingIconId, ensureBuildingIcons } from "./buildingIcons.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -74,6 +76,22 @@ const V_NEXT_TIER_LAYERS = [
 const MarkersLayer = () => {
   const { markers } = useWorldState();
   const [colorMap, setColorMap] = useState({});
+  const { current: map } = useMap();
+
+  // Couche HOI4 : les icônes des bâtiments, remises après chaque changement de
+  // style (qui efface les images de la carte).
+  useEffect(() => {
+    const mapInstance = map?.getMap?.() ?? map;
+    if (!mapInstance?.on) return undefined;
+    const install = () => ensureBuildingIcons(mapInstance);
+    install();
+    mapInstance.on("styledata", install);
+    mapInstance.on("styleimagemissing", install);
+    return () => {
+      mapInstance.off?.("styledata", install);
+      mapInstance.off?.("styleimagemissing", install);
+    };
+  }, [map]);
 
   useEffect(() => {
     getNationColors()
@@ -91,6 +109,9 @@ const MarkersLayer = () => {
           const status = normalizeMarkerStatus(marker.status);
           const statusLabel = MARKER_STATUS_LABEL[status];
           const presentation = getMarkerPresentation(marker);
+          // Couche HOI4 : un bâtiment a son icône ; l'anneau dit son état.
+          const buildingSpec = marker.building ? HOI_BUILDING_TYPES[marker.building.type] : null;
+          const condition = Number(marker.building?.condition ?? 100);
           return {
             type: "Feature",
             id: marker.id,
@@ -111,6 +132,9 @@ const MarkersLayer = () => {
               sortKey: presentation.sortKey,
               visibilityTier: presentation.visibilityTier,
               glyph: presentation.glyph,
+              hasBuilding: Boolean(buildingSpec),
+              icon: buildingSpec ? buildingIconId(buildingSpec.icon) : "",
+              damage: buildingSpec ? (condition <= 0 ? "destroyed" : condition < 100 ? "damaged" : "") : "",
               rgb: ownerColorString(colorMap, marker.ownerCode),
             },
           };
@@ -127,7 +151,7 @@ const MarkersLayer = () => {
             type="symbol"
             beforeId="country-curved-labels"
             minzoom={entry.shapeMinZoom}
-            filter={["==", ["get", "visibilityTier"], entry.tier]}
+            filter={["all", ["==", ["get", "visibilityTier"], entry.tier], ["!", ["get", "hasBuilding"]]]}
             layout={{
               "symbol-sort-key": ["get", "sortKey"],
               "text-field": ["get", "glyph"],
@@ -145,6 +169,39 @@ const MarkersLayer = () => {
             }}
           />
         ))}
+        {/* Couche HOI4 : un anneau sous l'icône d'un bâtiment endommagé ou détruit. */}
+        <Layer
+          id="markers-building-damage"
+          type="circle"
+          beforeId="country-curved-labels"
+          minzoom={3}
+          filter={["all", ["get", "hasBuilding"], ["!=", ["get", "damage"], ""]]}
+          paint={{
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 7, 8, 13],
+            "circle-color": "rgba(0, 0, 0, 0)",
+            "circle-stroke-width": 2.2,
+            "circle-stroke-color": ["match", ["get", "damage"], "destroyed", "#ef4444", "#f59e0b"],
+          }}
+        />
+        <Layer
+          id="markers-building-icons"
+          type="symbol"
+          beforeId="country-curved-labels"
+          minzoom={3}
+          filter={["get", "hasBuilding"]}
+          layout={{
+            "symbol-sort-key": ["get", "sortKey"],
+            "icon-image": ["get", "icon"],
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.55, 8, 0.9, 12, 1.2],
+            "icon-allow-overlap": true,
+          }}
+          paint={{
+            "icon-color": ["get", "rgb"],
+            "icon-halo-color": "rgba(5, 8, 12, 0.92)",
+            "icon-halo-width": 2,
+            "icon-opacity": ["get", "statusOpacity"],
+          }}
+        />
         {V_NEXT_TIER_LAYERS.map((entry) => (
           <Layer
             key={entry.labelId}

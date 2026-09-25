@@ -181,6 +181,44 @@ export const HOI_SERIES = Object.freeze({
 
 // Tous les autres pays : une petite économie qui tourne, pour que chaque pays de
 // la carte ait quelque chose à perdre, à échanger ou à saboter.
+// Phase 3 : où se trouvaient vraiment les usines des pays détaillés. Les usines
+// de départ y deviennent des complexes industriels (buildings.js), dans cet ordre
+// (le plus important d'abord). Écrit à la main : rattacher les villes d'une carte
+// à ses pays n'est pas assez sûr pour ça, et les populations d'aujourd'hui
+// mettraient Kinshasa avant Paris.
+const site = (name, lng, lat) => Object.freeze({ name, coordinates: Object.freeze([lng, lat]) });
+
+export const HOI_INDUSTRIAL_SITES = Object.freeze({
+  1936: Object.freeze([
+    [["Germany", "German Reich", "Nazi Germany"], [site("Essen", 7.01, 51.46), site("Berlin", 13.4, 52.52), site("Hambourg", 9.99, 53.55), site("Munich", 11.58, 48.14)]],
+    [["France", "French Republic", "French State"], [site("Paris", 2.35, 48.86), site("Lille", 3.06, 50.63), site("Lyon", 4.84, 45.76), site("Saint-Étienne", 4.39, 45.44)]],
+    [["United Kingdom", "Great Britain", "British Empire"], [site("Birmingham", -1.9, 52.49), site("Manchester", -2.24, 53.48), site("Glasgow", -4.25, 55.86), site("Londres", -0.13, 51.51)]],
+    [["Soviet Union", "USSR", "Union of Soviet Socialist Republics", "Russia"], [site("Moscou", 37.62, 55.76), site("Leningrad", 30.32, 59.94), site("Kharkov", 36.23, 49.99), site("Sverdlovsk", 60.61, 56.84)]],
+    [["United States", "United States of America", "USA"], [site("Détroit", -83.05, 42.33), site("Pittsburgh", -80, 40.44), site("Chicago", -87.63, 41.88), site("New York", -74.01, 40.71)]],
+    [["Italy", "Kingdom of Italy"], [site("Turin", 7.69, 45.07), site("Milan", 9.19, 45.46), site("Gênes", 8.93, 44.41)]],
+    [["Imperialist Japan", "Japan", "Empire of Japan", "Japanese Empire"], [site("Tokyo", 139.69, 35.69), site("Osaka", 135.5, 34.69), site("Nagoya", 136.91, 35.18)]],
+    [["Kuomintang China", "China", "Republic of China", "Nationalist China"], [site("Shanghai", 121.47, 31.23), site("Wuhan", 114.3, 30.59)]],
+  ]),
+  1912: Object.freeze([
+    [["German Empire", "Germany", "Deutsches Reich"], [site("Essen", 7.01, 51.46), site("Berlin", 13.4, 52.52), site("Breslau", 17.04, 51.11), site("Hambourg", 9.99, 53.55)]],
+    [["British Empire", "United Kingdom", "Great Britain"], [site("Birmingham", -1.9, 52.49), site("Manchester", -2.24, 53.48), site("Glasgow", -4.25, 55.86), site("Newcastle", -1.62, 54.98)]],
+    [["French Republic", "France"], [site("Paris", 2.35, 48.86), site("Lille", 3.06, 50.63), site("Le Creusot", 4.43, 46.8)]],
+    [["Russian Empire", "Russia"], [site("Saint-Pétersbourg", 30.32, 59.94), site("Moscou", 37.62, 55.76), site("Iouzovka", 37.8, 48.02)]],
+    [["Austrian Empire", "Austria-Hungary", "Austro-Hungarian Empire"], [site("Vienne", 16.37, 48.21), site("Pilsen", 13.38, 49.74)]],
+    [["Kingdom of Italy", "Italy"], [site("Turin", 7.69, 45.07), site("Milan", 9.19, 45.46)]],
+    [["Ottoman Empire", "Turkey"], [site("Constantinople", 28.98, 41.01)]],
+    [["United States", "United States of America"], [site("Pittsburgh", -80, 40.44), site("Détroit", -83.05, 42.33), site("Chicago", -87.63, 41.88), site("New York", -74.01, 40.71)]],
+    [["Japanese Empire", "Japan", "Empire of Japan"], [site("Tokyo", 139.69, 35.69), site("Osaka", 135.5, 34.69)]],
+  ]),
+});
+
+// Les sites industriels d'un pays dans une série, ou [] s'il n'y figure pas.
+export const findIndustrialSites = (seriesId, polity) => {
+  const key = String(polity ?? "").trim().toLowerCase();
+  const entry = (HOI_INDUSTRIAL_SITES[seriesId] ?? []).find(([aliases]) => aliases.some((alias) => alias.toLowerCase() === key));
+  return entry ? entry[1] : [];
+};
+
 export const HOI_NEUTRAL_NATION = Object.freeze({
   factories: Object.freeze({ civilian: 3, military: 1 }),
   stocks: Object.freeze({ acier: 10 }),

@@ -124,6 +124,12 @@ const round2 = (value) => Math.round(value * 100) / 100;
 const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => text(value).toLowerCase();
 
+// « de Paris », mais « d'Essen », « d'Osaka » : l'élision devant une voyelle.
+export const ofPlace = (name) => {
+  const place = text(name);
+  return /^[aeiouyàâäéèêëîïôöùûüœæ]/i.test(place) ? `d'${place}` : `de ${place}`;
+};
+
 // ---------------------------------------------------------------------------
 // Forme
 // ---------------------------------------------------------------------------
@@ -255,6 +261,10 @@ export const describeBuildingEffect = (building) => {
   return `${spec.effect.stat} niveau ${building.level}`;
 };
 
+// Des pays qui ont encore assez d'usines abstraites pour des complexes.
+export const needsComplexes = (nations) => Object.values(nations ?? {})
+  .some((nation) => Math.floor(num(nation?.factories?.civilian)) + Math.floor(num(nation?.factories?.military)) >= BUILDING_TUNING.complexMinFactories);
+
 // L'état affiché d'une structure, déduit du bâtiment. Un état posé par le récit
 // qui n'est pas de ce ressort (abandonné, inactif) est gardé.
 export const statusForBuilding = (building, currentStatus = "active") => {
@@ -347,6 +357,37 @@ const pickAutoProject = (owned) => {
   return candidates[0] ?? null;
 };
 
+// Pays gérés par le moteur, file vide : un chantier à lancer. Agrandir une usine
+// d'abord (pickAutoProject) ; sinon une usine neuve à côté de son premier
+// complexe, militaire tant que le pays a moins de 6 usines militaires pour 10
+// civiles. `makeId` rend un identifiant stable. Renvoie { owned, queue, created }.
+export const planAutoConstruction = (owned, { civilian = 0, military = 0, makeId, date = "" } = {}) => {
+  const pick = pickAutoProject(owned);
+  if (pick) {
+    const started = startConstruction(pick.marker.building);
+    if (started.error) return { owned, queue: [], created: null };
+    pick.marker = { ...pick.marker, building: started.building };
+    return { owned, queue: [String(pick.marker.id)], created: null };
+  }
+  const anchor = owned.find(({ marker }) => marker.building.type === "complexe_industriel" && marker.building.condition >= BUILDING_TUNING.minWorkingCondition);
+  if (!anchor || typeof makeId !== "function") return { owned, queue: [], created: null };
+  const type = military < civilian * 0.6 ? "usine_militaire" : "usine_civile";
+  const city = String(anchor.marker.name).replace(/^Complexe industriel (de |d')/i, "");
+  const count = owned.filter(({ marker }) => marker.building.type === type).length;
+  const created = newBuildingMarker({
+    type,
+    id: makeId(type, count),
+    name: `${HOI_BUILDING_TYPES[type].label[0].toUpperCase()}${HOI_BUILDING_TYPES[type].label.slice(1)} ${ofPlace(city)}${count ? ` ${count + 1}` : ""}`,
+    ownerCode: anchor.marker.ownerCode,
+    lng: Math.round((anchor.marker.lng + 0.1 + 0.05 * count) * 1e5) / 1e5,
+    lat: Math.round((anchor.marker.lat - 0.06) * 1e5) / 1e5,
+    date,
+  });
+  if (!created) return { owned, queue: [], created: null };
+  const entry = { index: -1, marker: created };
+  return { owned: [...owned, entry], queue: [String(created.id)], created: entry };
+};
+
 // Avance la construction d'un pays de `days` jours. `owned` : [{ index, marker }]
 // des structures du pays qui portent un bâtiment (copies modifiables). Renvoie
 // la file mise à jour et le rapport. Pur vis-à-vis de ses entrées.
@@ -359,7 +400,8 @@ export const advanceConstruction = (owned, queue, days, { effectiveCivilian, aut
   const byId = new Map(owned.map((entry) => [String(entry.marker.id), entry]));
   let nextQueue = queue.filter((id) => byId.get(String(id))?.marker.building.construction);
 
-  // Pays gérés par le moteur : un chantier à la fois, s'il n'y en a aucun.
+  // Pays gérés par le moteur : un chantier à la fois, s'il n'y en a aucun
+  // (planAutoConstruction, appelé par le moteur avant, peut aussi en créer un).
   if (auto && !nextQueue.length && budget > 0) {
     const pick = pickAutoProject(owned);
     if (pick) {
@@ -502,10 +544,12 @@ export const syncBuildingsWithMarkers = (markers, { resolveNation, resources = [
 // industriels dans leurs plus grandes villes. `citiesOf(pays)` rend les villes
 // du pays [{ name, coordinates: [lng, lat], population }]. Renvoie
 // { markers, nations, complexes } ; un pays sans ville garde ses usines abstraites.
-export const installBuildings = (markers, nations, { citiesOf, resolveNation, resources = [], date = "", makeId }) => {
+// `typeExisting: false` : seulement les complexes, pour une partie déjà installée
+// dont les villes n'étaient pas connues la première fois.
+export const installBuildings = (markers, nations, { citiesOf, resolveNation, resources = [], date = "", makeId, typeExisting = true }) => {
   const T = BUILDING_TUNING;
   const typed = (Array.isArray(markers) ? markers : []).map((marker) => {
-    if (!marker || marker.building) return marker;
+    if (!marker || marker.building || !typeExisting) return marker;
     const type = buildingTypeFor(marker.kind, marker.name);
     if (!type || type === "complexe_industriel" || !resolveNation?.(marker.ownerCode)) return marker;
     return {
@@ -528,7 +572,9 @@ export const installBuildings = (markers, nations, { citiesOf, resolveNation, re
     if (civilian + military < T.complexMinFactories) continue;
     const cities = (citiesOf?.(key) ?? [])
       .filter((city) => Array.isArray(city?.coordinates))
-      .sort((a, b) => num(b.population) - num(a.population) || String(a.name).localeCompare(String(b.name)));
+      // Les plus peuplées d'abord ; à égalité (sites sans population), l'ordre
+      // donné est gardé (sort est stable).
+      .sort((a, b) => num(b.population) - num(a.population));
     const count = Math.min(T.complexMaxCities, Math.max(1, Math.ceil((civilian + military) / T.complexFactoriesPerCity)), cities.length);
     if (!count) continue;
     const share = (total, i) => Math.floor(total / count) + (i < total % count ? 1 : 0);
@@ -538,7 +584,7 @@ export const installBuildings = (markers, nations, { citiesOf, resolveNation, re
       const [lng, lat] = city.coordinates;
       complexes.push({
         id: makeId(key, i),
-        name: `Complexe industriel de ${city.name}`,
+        name: `Complexe industriel ${ofPlace(city.name)}`,
         kind: HOI_BUILDING_TYPES.complexe_industriel.label,
         ownerCode: key,
         lng: Math.round((lng + 0.12) * 1e5) / 1e5,
