@@ -9,6 +9,13 @@ import {
 } from "./vnext/presentationPolicy.js";
 import { HOI_BUILDING_TYPES } from "../../runtime/hoi/buildings.js";
 import { buildingIconId, ensureBuildingIcons } from "./buildingIcons.js";
+import { fanOutOffsets } from "./buildingFan.js";
+
+// Le nom d'un bâtiment suit son icône décalée : l'écart de l'éventail
+// (icon-offset × icon-size, en pixels) ramené en ems du texte, à deux zooms.
+const LABEL_EMS_PER_UNIT_LOW = 0.073; // zoom 4 : icon-size 0,62, texte 8,5
+const LABEL_EMS_PER_UNIT_HIGH = 0.1; // zoom 10 : icon-size 1,05, texte 10,5
+const labelOffset = ([x, y], perUnit, below) => [Math.round(x * perUnit * 100) / 100, Math.round((y * perUnit + below) * 100) / 100];
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -101,6 +108,11 @@ const MarkersLayer = () => {
 
   const data = useMemo(() => {
     if (!markers.length) return EMPTY_FEATURE_COLLECTION;
+    // Couche HOI4 : les bâtiments proches les uns des autres en éventail, pour
+    // qu'aucun ne disparaisse sous un autre (buildingFan.js).
+    const offsets = fanOutOffsets(markers
+      .filter((marker) => marker.building && Number.isFinite(marker.lng) && Number.isFinite(marker.lat))
+      .map((marker) => ({ id: marker.id, lng: marker.lng, lat: marker.lat })));
     return {
       type: "FeatureCollection",
       features: markers
@@ -112,6 +124,7 @@ const MarkersLayer = () => {
           // Couche HOI4 : un bâtiment a son icône ; l'anneau dit son état.
           const buildingSpec = marker.building ? HOI_BUILDING_TYPES[marker.building.type] : null;
           const condition = Number(marker.building?.condition ?? 100);
+          const iconOffset = offsets.get(marker.id) ?? [0, 0];
           return {
             type: "Feature",
             id: marker.id,
@@ -135,6 +148,9 @@ const MarkersLayer = () => {
               hasBuilding: Boolean(buildingSpec),
               icon: buildingSpec ? buildingIconId(buildingSpec.icon) : "",
               damage: buildingSpec ? (condition <= 0 ? "destroyed" : condition < 100 ? "damaged" : "") : "",
+              iconOffset,
+              labelOffsetLow: labelOffset(iconOffset, LABEL_EMS_PER_UNIT_LOW, 1.2),
+              labelOffsetHigh: labelOffset(iconOffset, LABEL_EMS_PER_UNIT_HIGH, 1.3),
               rgb: ownerColorString(colorMap, marker.ownerCode),
             },
           };
@@ -169,18 +185,23 @@ const MarkersLayer = () => {
             }}
           />
         ))}
-        {/* Couche HOI4 : un anneau sous l'icône d'un bâtiment endommagé ou détruit. */}
+        {/* Couche HOI4 : un anneau sous l'icône d'un bâtiment endommagé ou détruit,
+            décalé avec elle dans l'éventail. */}
         <Layer
           id="markers-building-damage"
-          type="circle"
+          type="symbol"
           beforeId="country-curved-labels"
           minzoom={3}
           filter={["all", ["get", "hasBuilding"], ["!=", ["get", "damage"], ""]]}
+          layout={{
+            "icon-image": buildingIconId("ring"),
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.55, 8, 0.9, 12, 1.2],
+            "icon-offset": ["get", "iconOffset"],
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+          }}
           paint={{
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 7, 8, 13],
-            "circle-color": "rgba(0, 0, 0, 0)",
-            "circle-stroke-width": 2.2,
-            "circle-stroke-color": ["match", ["get", "damage"], "destroyed", "#ef4444", "#f59e0b"],
+            "icon-color": ["match", ["get", "damage"], "destroyed", "#ef4444", "#f59e0b"],
           }}
         />
         <Layer
@@ -193,7 +214,9 @@ const MarkersLayer = () => {
             "symbol-sort-key": ["get", "sortKey"],
             "icon-image": ["get", "icon"],
             "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.55, 8, 0.9, 12, 1.2],
+            "icon-offset": ["get", "iconOffset"],
             "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
           }}
           paint={{
             "icon-color": ["get", "rgb"],
@@ -209,7 +232,7 @@ const MarkersLayer = () => {
             type="symbol"
             beforeId="country-curved-labels"
             minzoom={entry.labelMinZoom}
-            filter={["==", ["get", "visibilityTier"], entry.tier]}
+            filter={["all", ["==", ["get", "visibilityTier"], entry.tier], ["!", ["get", "hasBuilding"]]]}
             layout={{
               "symbol-sort-key": ["get", "sortKey"],
               "text-field": ["get", "displayName"],
@@ -229,6 +252,31 @@ const MarkersLayer = () => {
             }}
           />
         ))}
+        {/* Couche HOI4 : le nom d'un bâtiment, sous son icône décalée. */}
+        <Layer
+          id="markers-building-labels"
+          type="symbol"
+          beforeId="country-curved-labels"
+          minzoom={5}
+          filter={["get", "hasBuilding"]}
+          layout={{
+            "symbol-sort-key": ["get", "sortKey"],
+            "text-field": ["get", "displayName"],
+            "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
+            "text-anchor": "top",
+            "text-offset": ["interpolate", ["linear"], ["zoom"], 4, ["get", "labelOffsetLow"], 10, ["get", "labelOffsetHigh"]],
+            "text-padding": 4,
+            "text-size": ["interpolate", ["linear"], ["zoom"], 4, 8.5, 10, 10.5],
+            "text-max-width": 14,
+          }}
+          paint={{
+            "text-color": "rgba(247, 246, 240, 0.96)",
+            "text-halo-color": "rgba(5, 8, 12, 0.92)",
+            "text-halo-width": 1.35,
+            "text-halo-blur": 0.35,
+            "text-opacity": ["get", "statusOpacity"],
+          }}
+        />
       </Source>
   );
 };

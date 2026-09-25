@@ -76,6 +76,12 @@ const DRAW = {
     c.lineTo(32, 45); c.lineTo(24, 42); c.lineTo(16, 45); c.lineTo(16, 42); c.lineTo(22, 38); c.lineTo(21, 26); c.lineTo(4, 30);
     c.lineTo(4, 26); c.lineTo(21, 18); c.closePath(); c.fill();
   },
+  // L'anneau d'état d'un bâtiment endommagé ou détruit, posé sous son icône
+  // (et décalé avec elle, contrairement à un cercle de la carte).
+  ring: (c) => {
+    c.lineWidth = 4;
+    c.beginPath(); c.arc(24, 24, 20, 0, Math.PI * 2); c.stroke();
+  },
   // Port : une ancre.
   port: (c) => {
     c.lineWidth = 4; c.lineCap = "round";
