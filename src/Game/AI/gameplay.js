@@ -97,7 +97,7 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, hashText, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -15229,22 +15229,71 @@ const hoiSlug = (value) => normalizeString(value).toLowerCase().normalize("NFD")
 
 // Parties déjà installées pour lesquelles on a retenté les complexes cette session.
 const hoiComplexRetries = new Set();
+// Parties dont on a vérifié cette session que chaque bâtiment est chez son propriétaire.
+const hoiSnapChecks = new Set();
+
+// Un bâtiment doit se trouver sur une terre de son propriétaire. Les bassins
+// industriels sont posés aux vraies coordonnées, et une carte même recalée garde
+// une marge (côtes, frontières) : un bâtiment en mer ou chez le voisin est ramené
+// au point le plus proche, un peu à l'intérieur, de la région la plus proche de
+// son propriétaire. Renvoie { markers, moved: [noms] }.
+const snapHoiBuildingsToTerritory = async (world) => {
+  const markers = normalizeArray(world?.markers);
+  if (!world?.hoi || !markers.some((marker) => marker?.building)) return { markers, moved: [] };
+  const context = await lazyLookupContext({ world })();
+  const rows = context.rows.filter((row) => row.geometry && row.bbox && row.owner);
+  const center = (row) => [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2];
+  const moved = [];
+  const next = markers.map((marker) => {
+    if (!marker?.building) return marker;
+    const key = findNationKey(world.hoi, marker.ownerCode);
+    if (!key) return marker;
+    const point = [marker.lng, marker.lat];
+    const here = rows.find((row) => point[0] >= row.bbox[0] && point[0] <= row.bbox[2]
+      && point[1] >= row.bbox[1] && point[1] <= row.bbox[3] && pointInGeometry(point, row.geometry));
+    if (here && findNationKey(world.hoi, here.owner) === key) return marker;
+    const owned = rows.filter((row) => findNationKey(world.hoi, row.owner) === key);
+    if (!owned.length) return marker;
+    const nearest = owned.reduce((best, row) => {
+      const d = placementDistanceKm(center(row), point);
+      return d < best.d ? { row, d } : best;
+    }, { row: owned[0], d: Infinity }).row;
+    const inside = nearestInteriorPoint(nearest.geometry, point, { seed: hashText(String(marker.id)) });
+    if (!inside) return marker;
+    moved.push(marker.name);
+    return { ...marker, lng: Math.round(inside[0] * 1e5) / 1e5, lat: Math.round(inside[1] * 1e5) / 1e5 };
+  });
+  return { markers: next, moved };
+};
 
 export const ensureHoiBuildings = async ({ gameId = "" } = {}) => {
   if (hoiBuildingsInFlight || isSimulationBusy()) return { status: "busy" };
   const world = await readWorldState({ force: true });
   if (!world?.hoi) return { status: "skip" };
   // Déjà installée : seulement les complexes qui manquaient (villes inconnues la
-  // première fois), une tentative par session.
+  // première fois), une tentative par session ; et, une fois par session, la
+  // vérification que chaque bâtiment est bien chez son propriétaire.
+  const sessionKey = gameId || "active";
   const retry = Boolean(world.hoi.buildingsInstalled);
-  if (retry && (!needsComplexes(world.hoi.nations) || hoiComplexRetries.has(gameId || "active"))) return { status: "skip" };
-  if (retry) hoiComplexRetries.add(gameId || "active");
+  const wantComplexes = !retry || (needsComplexes(world.hoi.nations) && !hoiComplexRetries.has(sessionKey));
+  const wantSnap = !hoiSnapChecks.has(sessionKey);
+  if (!wantComplexes && !wantSnap) return { status: "skip" };
+  if (retry && wantComplexes) hoiComplexRetries.add(sessionKey);
+  hoiSnapChecks.add(sessionKey);
   hoiBuildingsInFlight = true;
   try {
     const game = await readGameData({ force: true });
     if (isSimulationBusy()) return { status: "busy" };
     const fresh = await readWorldState({ force: true });
     if (!fresh?.hoi || Boolean(fresh.hoi.buildingsInstalled) !== retry) return { status: "skip" };
+    if (!wantComplexes) {
+      const snapped = await snapHoiBuildingsToTerritory(fresh);
+      if (!snapped.moved.length) return { status: "skip" };
+      if (isSimulationBusy()) return { status: "busy" };
+      await writeWorldState({ ...fresh, markers: snapped.markers });
+      logDebugEvent("hoi", `Buildings moved back onto their owner's land: ${snapped.moved.join(", ")}.`);
+      return { status: "snapped", moved: snapped.moved };
+    }
     const installed = installBuildings(normalizeArray(fresh.markers), fresh.hoi.nations, {
       typeExisting: !retry,
       // Les vrais bassins industriels des pays détaillés (presets.js) ; les
@@ -15255,14 +15304,17 @@ export const ensureHoiBuildings = async ({ gameId = "" } = {}) => {
       date: normalizeString(game.gameDate),
       makeId: (key, index) => `hoi-complexe-${hoiSlug(key)}-${index + 1}`,
     });
-    const next = refreshBuildingBonuses({
+    const installedWorld = {
       ...fresh,
       markers: installed.markers,
       hoi: { ...fresh.hoi, nations: installed.nations, buildingsInstalled: true },
-    });
+    };
+    // Les bassins sont aux vraies coordonnées : chacun ramené sur sa terre si besoin.
+    const snapped = await snapHoiBuildingsToTerritory(installedWorld);
+    const next = refreshBuildingBonuses({ ...installedWorld, markers: snapped.markers });
     await writeWorldState(next);
-    logDebugEvent("hoi", `Buildings installed: ${installed.complexes} industrial complexes.`);
-    return { status: "installed", complexes: installed.complexes };
+    logDebugEvent("hoi", `Buildings installed: ${installed.complexes} industrial complexes.`, { moved: snapped.moved });
+    return { status: "installed", complexes: installed.complexes, moved: snapped.moved };
   } finally {
     hoiBuildingsInFlight = false;
   }

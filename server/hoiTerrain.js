@@ -22,11 +22,14 @@ export const TERRAIN_SLOTS = Object.freeze({
 export const CITY_SLOT_POPULATION = 200000;
 
 export const TERRAIN_TUNING = Object.freeze({
+  // Le relief (écart-type d'altitude) compte plus que l'altitude moyenne : un
+  // haut plateau peu accidenté (Iran, Mexique, Sahara) reste plaine ou désert.
   mountainMean: 1800,
-  mountainReliefMean: 800,
+  mountainMeanRelief: 150,
   mountainRelief: 450,
+  hillRelief: 180,
   hillMean: 600,
-  hillRelief: 200,
+  hillMeanRelief: 90,
   urbanPopulation: 1500000,
   urbanDensity: 250, // habitants par km², villes seulement
   marshMaxElevation: 8,
@@ -79,13 +82,13 @@ export const classifyTerrain = ({ lng, lat, elevation = null, population = 0, ar
   if (population >= T.urbanPopulation && density >= T.urbanDensity) return "urbain";
 
   if (elevation) {
-    if (elevation.mean >= T.mountainMean || (elevation.relief >= T.mountainRelief && elevation.mean >= T.mountainReliefMean)) return "montagne";
-    if (elevation.mean >= T.hillMean || elevation.relief >= T.hillRelief) return "colline";
+    if ((elevation.mean >= T.mountainMean && elevation.relief >= T.mountainMeanRelief) || elevation.relief >= T.mountainRelief) return "montagne";
   } else if (inAny(lng, lat, MOUNTAINS)) {
     return "montagne";
   }
 
   if (inAny(lng, lat, DESERTS)) return "desert";
+  if (elevation && (elevation.relief >= T.hillRelief || (elevation.mean >= T.hillMean && elevation.relief >= T.hillMeanRelief))) return "colline";
   if (inAny(lng, lat, MARSHES)) return "marais";
   if (elevation && coastal && elevation.mean <= T.marshMaxElevation && elevation.relief <= T.marshMaxRelief) return "marais";
   if (absLat <= T.jungleLat && (!elevation || elevation.mean < T.jungleMaxElevation)) return "jungle";
