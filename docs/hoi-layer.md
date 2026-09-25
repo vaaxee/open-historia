@@ -126,6 +126,33 @@ Un bâtiment produit au prorata de son état, et plus rien sous 25 %. Les techs 
 - Un `markerOps` « damaged » ou « destroyed » devient un état chiffré (60 % au plus, ou 0).
 - Le bloc `[ÉCONOMIE]` décrit les bâtiments, les chantiers, les dégâts et ce qui a été terminé.
 
+## Les provinces (phase 4, en cours)
+
+Les régions restent les États (les transferts de territoire de l'IA ne changent pas) ; chacune est découpée en provinces, qui portent le terrain, les emplacements de construction et les voisinages des futurs fronts.
+
+- **Génération, sur le serveur** : `server/hoiProvinceGen.js`. Graines sur les plus grandes villes, complétées au plus loin, 3 passes de Lloyd, cellules de Voronoï coupées au contour de la région. Plus fin près des villes, plus grossier dans le vide : 10 000 km² en moyenne au départ, réglable dans `PROVINCE_TUNING`. Nom = la ville principale, sinon « Région – n ».
+- **Cache** : `server/hoiProvinces.js` écrit `server/data/hoi-provinces/<clé>.json`, refait seulement quand les régions, les villes, les tuiles d'altitude ou les réglages changent. Servi par `GET /api/hoi/provinces`. Scénario WW2+ : 7 165 provinces, 8 s la première fois, 8,4 Mo.
+- **Terrain** : `server/hoiTerrain.js`, à partir de l'**altitude réelle** (moyenne, relief, maximum sur une grille de points de la province), de la latitude et de quelques zones (déserts, marais). Sans les tuiles, une règle simple par zones prend le relais. Emplacements : urbain 5, plaine 3, forêt et colline 2, le reste 1, plus 1 par tranche de 200 000 habitants.
+
+### Données d'altitude
+
+Tuiles téléchargées une fois, à la main, par `node scripts/hoi-fetch-elevation.mjs` (256 images PNG, zoom 4, environ 18 Mo, dans `server/data/hoi-elevation/`, non versionnées). Le serveur ne télécharge jamais rien.
+
+> **Source** : Terrain Tiles d'Amazon Web Services (format Terrarium), © Mapzen et contributeurs, à partir de SRTM, GMTED2010, ETOPO1 et d'autres jeux de données publics. Licence ouverte, attribution détaillée : <https://github.com/tilezen/joerd/blob/master/docs/attribution.md>.
+
+### Recalage du scénario WW2+
+
+La carte du scénario WW2+ (`server/data/scenarios/hoi4-states-copy-copy-2/`) venait d'une image de HOI4 étalée entre 65° S et 65° N : Paris tombait en mer et Berlin en Suède. `scripts/hoi-georeference.mjs` la recale sur les frontières actuelles, à partir d'une cinquantaine de pays au territoire stable depuis 1936 (polynôme de degré 3 puis correction locale). Écart moyen restant : 0,6°. Paris, Berlin, Madrid, Varsovie, Rome, Londres, Moscou et Le Caire tombent dans leur pays.
+
+```bash
+node --max-old-space-size=6144 scripts/hoi-georeference.mjs hoi4-states-copy-copy-2           # mesure seulement
+node --max-old-space-size=6144 scripts/hoi-georeference.mjs hoi4-states-copy-copy-2 --apply   # réécrit, avec sauvegarde
+```
+
+Copies d'origine, à côté des fichiers : `regions.geojson.avant-recalage-2026-09-25T12-26-55-267Z`, `regions.coarse.geojson.avant-recalage-…` et `regions.coarse.geojson.stamp.avant-recalage-…`. Pour revenir en arrière, les renommer sans le suffixe.
+
+Au chargement d'une partie, un bâtiment qui ne tombe pas sur une terre de son propriétaire est ramené au point le plus proche de son territoire (`snapHoiBuildingsToTerritory` dans `gameplay.js`).
+
 ## Vérifier chez soi
 
 ```bash
