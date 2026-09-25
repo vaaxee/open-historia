@@ -2,7 +2,7 @@
 
 Ce fork ajoute sous la narration d'Open Historia une couche de gestion façon Hearts of Iron IV : ressources, production, puis technologies, focus, armées et fronts. Principe : **l'IA raconte, le moteur compte**.
 
-## État : phase 2
+## État : phase 3
 
 | Élément | Fichier | Statut |
 | --- | --- | --- |
@@ -13,12 +13,16 @@ Ce fork ajoute sous la narration d'Open Historia une couche de gestion façon He
 | Arbre de recherche : validation, équipements, installation | `src/runtime/hoi/techTree.js` | Fait (phase 2) |
 | Arbres de secours 1936 et 1912 | `src/runtime/hoi/techTreePresets.js` | Fait (phase 2) |
 | Arbre écrit par l'IA | `gameplay.js` (`generateHoiTechTree`, `ensureHoiTechTree`), tâche `hoiTechTree` | Fait (phase 2) |
-| Tests de la couche | `src/runtime/hoi/*.test.js`, `src/Game/AI/economyOpsWiring.test.js` | 53 tests, passent |
+| Tests de la couche | `src/runtime/hoi/*.test.js`, `src/Game/AI/economyOpsWiring.test.js` | 72 tests, passent |
 | Activation au lancement | case « HOI4 layer » à l'étape de la difficulté (`libraryBar.jsx`) | Fait |
 | Bloc `[ÉCONOMIE]` dans le tour | `promptContext.js` (`economySummary`) → `gameplay.js` (`[Economy Layer]`) | Fait, avec la recherche |
 | Application dans le tour | `applySimulationResult` : `economyOps` puis `advanceHoiLayer` | Fait |
 | Panneau « Production » | `src/Game/GameUI/production.jsx`, 4ᵉ bouton du dock | Fait, réaffectation des usines |
 | Panneau « Recherche » | `src/Game/GameUI/research.jsx`, 5ᵉ bouton du dock | Fait (phase 2) |
+| Bâtiments et construction | `src/runtime/hoi/buildings.js`, `constructionOps.js` | Fait (phase 3) |
+| Icônes des bâtiments sur la carte | `src/Game/Map/buildingIcons.js`, `MarkersLayer.jsx` | Fait (phase 3) |
+| Fiche au clic | `src/Game/Selection/Features.jsx` | Fait (phase 3), stats du bâtiment |
+| Section « Construction » | `src/Game/GameUI/construction.jsx`, dans le panneau Production | Fait (phase 3) |
 
 La couche est **inerte** tant qu'une partie n'a pas de `world.hoi` : une partie Open Historia ordinaire ne change pas. Elle ne voit ni le bloc `[ÉCONOMIE]`, ni `economyOps` dans l'outil du tour (26 363 caractères, comme avant), ni les boutons Production et Recherche, et ne déclenche jamais la tâche `hoiTechTree`.
 
@@ -58,7 +62,7 @@ Un pays inconnu est refusé. Chaque valeur ramenée dans ses bornes ou refusée 
 
 ## Les technologies (phase 2)
 
-**L'arbre.** Au chargement d'une partie HOI4 qui n'en a pas (nouvelle partie, ou partie de la phase 1), une seule requête `hoiTechTree` demande à l'IA un arbre de 25 à 45 techs en cinq branches : infanterie, artillerie, blindés, aviation, industrie. Le modèle utilisé se choisit dans les réglages de l'IA, sous « HOI4 tech tree ». Si l'IA ne répond pas ou si son arbre est inutilisable (moins de 12 techs après validation), l'arbre de secours de la série est installé : 27 techs pour 1936, 22 pour 1912. Pour une autre époque sans réponse de l'IA, la partie reste sans technologies, et le prochain chargement réessaie.
+**L'arbre.** Au chargement d'une partie HOI4 qui n'en a pas (nouvelle partie, ou partie de la phase 1), une seule requête `hoiTechTree` demande à l'IA un arbre de 25 à 45 techs en cinq branches : infanterie, artillerie, blindés, aviation, industrie. Le modèle utilisé se choisit dans les réglages de l'IA, sous « HOI4 tech tree ». Si l'IA ne répond pas ou si son arbre est inutilisable (moins de 12 techs après validation), l'arbre de secours de la série est installé : 28 techs pour 1936, 22 pour 1912. Pour une autre époque sans réponse de l'IA, la partie reste sans technologies, et le prochain chargement réessaie.
 
 **La validation** (`techTree.js`), qui s'applique à l'arbre de l'IA comme à ceux de secours :
 - identifiants uniques et branches connues ;
@@ -87,6 +91,41 @@ Un pays inconnu est refusé. Chaque valeur ramenée dans ses bornes ou refusée 
 
 **Dans le tour** : le bloc `[ÉCONOMIE]` indique les recherches en cours, les techs acquises au dernier saut, les équipements débloqués, et ceux qui ne le sont **pas encore**, que l'IA ne doit pas faire apparaître.
 
+## Les bâtiments (phase 3)
+
+**Ce qu'est un bâtiment.** Une structure de la carte qui porte `building` : type, niveau, état (0 à 100 %), chantier en cours. Le propriétaire est celui de la structure.
+
+| Type | Effet par niveau | Niveau max | Coût (points) |
+| --- | --- | --- | --- |
+| Complexe industriel (de départ) | ses usines civiles et militaires | 1 | — |
+| Usine civile | +1 usine civile | 5 | 10 800 |
+| Usine militaire | +1 usine militaire | 5 | 7 200 |
+| Raffinerie | +3 pétrole par mois | 3 | 6 000 |
+| Raffinerie synthétique | +2 caoutchouc par mois | 3 | 8 000 |
+| Aciérie | +4 acier par mois | 3 | 7 000 |
+| Mine | +3 d'une ressource par mois | 3 | 4 000 |
+| Fort, radar, aérodrome, port | niveau lu par l'IA (pas encore de combat) | 3 à 5 | 1 500 à 4 000 |
+
+Un bâtiment produit au prorata de son état, et plus rien sous 25 %. Les techs peuvent réserver la raffinerie, la raffinerie synthétique, l'aciérie, le radar et l'aérodrome ; les usines, mines, forts et ports sont toujours constructibles.
+
+**L'installation**, une fois par partie au chargement :
+- les usines de départ des pays détaillés deviennent des complexes industriels dans leurs vrais bassins industriels (Paris, Lille, Lyon, Saint-Étienne ; la Ruhr, Berlin, Hambourg, Munich ; Détroit, Pittsburgh…), bombardables ;
+- les autres pays gardent leurs usines abstraites ;
+- les structures déjà sur la carte reçoivent un type, niveau 1, sans effet économique pour ce qui était déjà compté.
+
+**La construction.**
+- Chaque usine civile donne 5 points par jour ; 20 % des usines civiles vont aux biens de consommation (`BUILDING_TUNING`).
+- 15 usines au plus travaillent sur un même chantier (75 points par jour).
+- Les réparations passent d'elles-mêmes et en premier : une réparation complète coûte la moitié du coût d'un niveau, par niveau.
+- Le joueur bâtit dans la section Construction du panneau Production : sur un bassin industriel de son pays, une ville que la carte situe chez lui, ou une de ses structures. Il peut aussi agrandir, réordonner et annuler.
+- Les pays gérés par le moteur agrandissent une usine, ou en bâtissent une à côté de leurs complexes, un chantier à la fois.
+
+**L'IA.**
+- Une structure qu'elle raconte (« une raffinerie ouvre à Leuna ») reçoit un type d'après son nom et entre dans la file de chantiers de son propriétaire : jamais de bâtiment offert.
+- Un bombardement ou un sabotage est une `economyOps` `damage` : cible = nom exact de la structure, de 10 à 50 % d'état.
+- Un `markerOps` « damaged » ou « destroyed » devient un état chiffré (60 % au plus, ou 0).
+- Le bloc `[ÉCONOMIE]` décrit les bâtiments, les chantiers, les dégâts et ce qui a été terminé.
+
 ## Vérifier chez soi
 
 ```bash
@@ -98,8 +137,10 @@ npm run dev                             # lancer le jeu
 
 ## Limites connues
 
-- Le nombre d'usines ne change pas encore (pas de construction ni de destruction) : ce sera la phase 3.
-- Les techs débloquent des équipements et des bonus, pas encore de bâtiments (phase 3).
+- Les forts, radars, aérodromes et ports n'ont pas encore d'effet en jeu : leur niveau est seulement lu par l'IA, en attendant les armées et les fronts.
+- Le lieu d'un chantier se choisit dans une liste ; le clic sur la carte viendra avec sa refonte visuelle.
+- Les contours grossiers de certains scénarios peuvent rattacher une ville frontalière au mauvais pays dans la liste des sites (par exemple Kinshasa à la France).
+- Un changement de propriétaire d'une région ne transfère pas encore les bâtiments qui s'y trouvent.
 - Les opérations du Game Master ne passent pas par `economyOps`.
 - Une partie ordinaire déjà en cours ne peut pas encore activer la couche.
 - Le joueur ne voit que sa propre recherche ; celle des autres pays n'apparaît qu'en nombre de techs, dans le bloc `[ÉCONOMIE]`.
@@ -107,7 +148,6 @@ npm run dev                             # lancer le jeu
 
 ## Feuille de route
 
-- **Phase 3 : construction.** Les usines civiles construisent des usines militaires, des usines civiles et des bâtiments débloqués par les techs (raffineries, aciéries, etc.) ; bombardements et sabotages détruisent des usines ; nouvelle opération `economyOps` pour les dégâts.
 - **Ensuite :** activation de la couche sur une partie existante, focus nationaux, armées et fronts.
 
 ## Licence
