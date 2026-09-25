@@ -42,6 +42,7 @@ import {
   writeGameSnapshots,
   writeRuntimeJsonAsset,
 } from "./libraryStore.js";
+import { ensureActiveProvinces } from "./hoiProvinces.js";
 import {
   createMapEditorDocument,
   deleteMapEditorDocument,
@@ -773,6 +774,23 @@ app.delete("/api/scenarios/:scenarioId", (req, res) => {
     res.json(deleteScenario(req.params.scenarioId));
   } catch (error) {
     sendError(res, 400, error);
+  }
+});
+
+// Couche HOI4, phase 4 : les provinces du scénario actif (server/hoiProvinces.js),
+// générées une fois et gardées en cache. {} pour une carte sans régions GeoJSON.
+app.get("/api/hoi/provinces", (req, res) => {
+  try {
+    const file = ensureActiveProvinces();
+    if (!file) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ provinces: { type: "FeatureCollection", features: [] }, adjacency: {}, stamp: "" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    streamBinaryFile(req, res, file, "application/json; charset=utf-8");
+  } catch (error) {
+    sendError(res, 500, error);
   }
 });
 
