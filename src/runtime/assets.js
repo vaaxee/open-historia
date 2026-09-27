@@ -1529,6 +1529,8 @@ export const primeCustomRegionCatalogEntries = (
       adjacencies: Array.isArray(raw?.adjacencies)
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
+      // Other names the AI may use for the region (a world-map state: « Danzig »).
+      aliases: Array.isArray(raw?.aliases) ? raw.aliases.map((value) => String(value)).filter(Boolean) : [],
       ...(isBox(raw?.bounds) ? { bounds: raw.bounds } : {}),
     });
   }
@@ -1624,6 +1626,7 @@ export const primeCustomRegionCatalog = (
       tags: Array.isArray(props?.tags) ? props.tags : [],
       type: props?.type ?? "",
       adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
+      aliases: Array.isArray(props?.aliases) ? props.aliases : [],
       bounds: geometryBounds(feature?.geometry),
     });
   }
@@ -1774,6 +1777,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
             if (entry.name) existing.name = String(entry.name);
             if (entry.country) existing.country = String(entry.country);
             if (entry.countryCode) existing.countryCode = String(entry.countryCode);
+            if (entry.aliases?.length) existing.aliases = entry.aliases;
             continue;
           }
           seen.set(id, {
@@ -1781,6 +1785,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
             countryCode: entry.countryCode ? String(entry.countryCode) : "",
             id,
             name: entry.name ? String(entry.name) : id,
+            ...(entry.aliases?.length ? { aliases: entry.aliases } : {}),
           });
         }
       } catch {

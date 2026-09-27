@@ -32,6 +32,8 @@ for (const d of report.differences) {
   say(`| ${d.from} → **${d.to}** | ${Math.round(d.km2).toLocaleString("fr-FR")} km² | ${origin(d.rules)} | ${d.provinces.slice(0, 8).join(", ")}${d.provinces.length > 8 ? `, … (${d.provinces.length})` : ""} |`);
 }
 say();
-say(`Hors d'Europe et de la Méditerranée : ${report.changedOutsideEuropeMed} provinces corrigées (sud de Sakhaline et Kouriles, Touva, Côte française des Somalis).`);
+say(`Hors d'Europe et de la Méditerranée : ${report.changedOutsideEuropeMed} provinces corrigées.`);
+say();
+for (const o of report.outsideEuropeMed ?? []) say(`- ${o.change} : ${o.provinces} province(s)`);
 say();
 process.stdout.write(out.join("\n"));

@@ -840,6 +840,10 @@ const readGameMeta = (gameId) => {
     scenarioId: String(raw?.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID,
     subtitle,
     updatedAt: raw?.updatedAt ?? new Date().toISOString(),
+    // Carte mondiale unique (phase 5) : la partie se joue sur les états de la
+    // carte mondiale (server/worldMapStates.js). Posé à la création, d'après le
+    // scénario ; les parties d'avant ne l'ont pas et gardent l'ancienne carte.
+    worldMap: raw?.worldMap === "v1" ? "v1" : null,
   };
 };
 
@@ -2065,6 +2069,56 @@ const createScenario = ({
   return getScenarioDetails(scenarioId);
 };
 
+// Un scénario converti sur la carte mondiale (scripts/worldmap/convert-scenario.mjs),
+// la carte générée : ses nouvelles parties s'y jouent.
+const scenarioUsesWorldMap = (scenarioId) =>
+  fs.existsSync(path.join(getScenarioDirectory(scenarioId), "provinces.v1.json"))
+  && fs.existsSync(path.join(SERVER_DATA_DIR, "worldmap", "v1", "meta.json"));
+
+// Une nouvelle partie sur la carte mondiale : ses propriétaires de départ sont
+// ceux des états (provinces.v1.json : les anciennes régions sans province en
+// sortent, les morceaux détachés par la correction de 1936 y entrent), et les
+// pays que la correction ajoute (Dantzig, Tanger) y reçoivent leur fiche :
+// couleur, drapeau, étiquettes, note pour l'IA, numéro.
+const seedGameWorldMap = (gameId, scenarioId) => {
+  const scenario = readJsonFile(path.join(getScenarioDirectory(scenarioId), "provinces.v1.json"), null);
+  if (!scenario?.states) return;
+  const present = new Set(scenario.states.filter(Boolean));
+  const world = readJsonFile(getGameJsonPath(gameId, "world"), {});
+  const overrides = {};
+  for (const state of present) {
+    const owner = scenario.stateOwners?.[state] ?? world.regionOwnershipOverrides?.[state];
+    if (owner) overrides[state] = owner;
+  }
+  world.regionOwnershipOverrides = overrides;
+  const colors = readJsonFile(getGameJsonPath(gameId, "colors"), {});
+  const flags = readJsonFile(getGameJsonPath(gameId, "flags"), {});
+  const tags = readJsonFile(getGameJsonPath(gameId, "tags"), {});
+  world.polityOverrides = { ...(world.polityOverrides ?? {}) };
+  world.ownerCodes = { ...(world.ownerCodes ?? {}) };
+  const codes = Object.keys(world.ownerCodes).map(Number).filter(Number.isFinite);
+  let nextCode = codes.length ? Math.max(...codes) + 1 : 1;
+  const hex = (rgb) => `#${rgb.map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
+  for (const [owner, info] of Object.entries(scenario.newOwners ?? {})) {
+    if (!Object.values(world.ownerCodes).includes(owner)) world.ownerCodes[String(nextCode++)] = owner;
+    world.polityOverrides[owner] = {
+      name: owner,
+      aliases: Array.isArray(info.aliases) ? info.aliases : [owner],
+      status: "active",
+      note: String(info.note ?? ""),
+      ...(Array.isArray(info.color) ? { color: hex(info.color) } : {}),
+      ...(world.polityOverrides[owner] ?? {}),
+    };
+    if (Array.isArray(info.color) && !colors[owner]) colors[owner] = info.color;
+    if (info.flag && !flags[owner]) flags[owner] = info.flag;
+    if (Array.isArray(info.tags) && !tags[owner]) tags[owner] = info.tags;
+  }
+  writeJsonFile(getGameJsonPath(gameId, "world"), world);
+  writeJsonFile(getGameJsonPath(gameId, "colors"), colors);
+  writeJsonFile(getGameJsonPath(gameId, "flags"), flags);
+  writeJsonFile(getGameJsonPath(gameId, "tags"), tags);
+};
+
 const createGame = ({
   accentColor,
   description,
@@ -2096,6 +2150,7 @@ const createGame = ({
     const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
     sourceScenario = getScenarioSummary(nextScenarioId);
     seedGameJsonFilesFromScenario(resolvedGameId, nextScenarioId);
+    if (scenarioUsesWorldMap(nextScenarioId)) seedGameWorldMap(resolvedGameId, nextScenarioId);
   }
 
   const createdAt = new Date().toISOString();
@@ -2130,6 +2185,7 @@ const createGame = ({
     scenarioSummary.heroTitle ||
     DEFAULT_GAME_META.heroTitle,
     name: String(name ?? "").trim() || `${seedName} Session`,
+    worldMap: sourceGame ? sourceGame.worldMap ?? null : scenarioUsesWorldMap(scenarioSummary.id) ? "v1" : null,
                 scenarioId: scenarioSummary.id,
                 coverImageContentType: sourceGame?.coverImageContentType ?? null,
                 subtitle:

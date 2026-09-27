@@ -20,8 +20,8 @@ const chunk = (type, data) => {
   return Buffer.concat([length, body, crc]);
 };
 
-// pixels : Uint8Array de width × height × 3.
-export const writePng = (file, width, height, pixels) => {
+// pixels : Uint8Array de width × height × 3. Le fichier PNG, en mémoire.
+export const encodePng = (width, height, pixels) => {
   const raw = Buffer.alloc((width * 3 + 1) * height);
   for (let y = 0; y < height; y += 1) {
     raw[y * (width * 3 + 1)] = 0;
@@ -30,10 +30,11 @@ export const writePng = (file, width, height, pixels) => {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4);
   header[8] = 8; header[9] = 2; header[10] = 0; header[11] = 0; header[12] = 0;
-  fs.writeFileSync(file, Buffer.concat([
+  return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),
     chunk("IDAT", zlib.deflateSync(raw, { level: 6 })),
     chunk("IEND", Buffer.alloc(0)),
-  ]));
+  ]);
 };
+export const writePng = (file, width, height, pixels) => fs.writeFileSync(file, encodePng(width, height, pixels));

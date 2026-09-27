@@ -11,7 +11,7 @@
 import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "./dataDir.js";
-import { resolveRuntimeGeojsonAsset } from "./libraryStore.js";
+import { getActiveGameSummary, resolveRuntimeGeojsonAsset } from "./libraryStore.js";
 
 export const WORLD_MAP_DIR = path.join(DATA_DIR, "worldmap", "v1");
 export const WORLD_MAP_FILES = Object.freeze([
@@ -51,6 +51,17 @@ export const activeScenarioWorldMapFile = () => {
   return fs.existsSync(file) ? file : null;
 };
 
+// La partie active se joue-t-elle sur la carte mondiale ? (posé à sa création :
+// server/libraryStore.js, createGame). Le fichier de son scénario, sinon null.
+export const activeGameWorldMapFile = () => {
+  try {
+    if (getActiveGameSummary()?.worldMap !== "v1") return null;
+    return worldMapStatus().available ? activeScenarioWorldMapFile() : null;
+  } catch {
+    return null;
+  }
+};
+
 export const registerWorldMapRoutes = (app) => {
   app.get("/api/worldmap/scenario", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -61,7 +72,7 @@ export const registerWorldMapRoutes = (app) => {
   });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json(worldMapStatus());
+    res.json({ ...worldMapStatus(), game: Boolean(activeGameWorldMapFile()) });
   });
   app.get("/api/worldmap/v1/tiles/:z/:x/:y.pbf", (req, res) => {
     const z = int(req.params.z); const x = int(req.params.x); const y = int(req.params.y);

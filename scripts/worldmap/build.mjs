@@ -33,6 +33,7 @@ import { readZip } from "./lib/zip.mjs";
 import { shapefileFromZip } from "./lib/shapefile.mjs";
 import { assemble, smoothArc, toLngLat, traceArcs } from "./lib/vectorize.mjs";
 import { GUIDES_1936, GUIDES_1936_ADMIN1 } from "./guides-1936.mjs";
+import { nameIslands } from "./islands.mjs";
 import { groupArchipelagos, landComponents, mergeStrips, mergeTiny, renumber, respectHistories, unifySmallIslands } from "./lib/refine.mjs";
 import {
   H, N, STEP, W, cached, cellKm2, cellOf, fillRings, latOf, linesOf, lngOf, traceLine,
@@ -1221,12 +1222,13 @@ log("Attributs…");
     if (!grid.has(k)) grid.set(k, []);
     grid.get(k).push(city);
   }
-  const nearestCity = ([x, y]) => {
+  const nearestCity = ([x, y], country = "") => {
     for (let r = 0; r <= 8; r += 1) {
       let best = null; let bestD = Infinity;
       for (let dx = -r; dx <= r; dx += 1) for (let dy = -r; dy <= r; dy += 1) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         for (const city of grid.get(`${Math.floor(x) + dx}:${Math.floor(y) + dy}`) ?? []) {
+          if (country && city.country !== country) continue;
           const d = ((city.lng - x) * Math.cos((y * Math.PI) / 180)) ** 2 + (city.lat - y) ** 2;
           if (d < bestD) { bestD = d; best = city; }
         }
@@ -1261,6 +1263,82 @@ log("Attributs…");
       state: stateOf[l],
       country: countryOf[l]?.ADM0_A3 ?? "",
     });
+  }
+  // Îles : le nom de l'île, pas celui de la ville la plus proche d'un autre
+  // pays (islands.mjs). Le rapport : islands-report.json.
+  {
+    const { comp, km2: compKm2 } = landComponents(land);
+    const cellNear = (lng, lat) => {
+      const c0 = cellOf(lng, lat);
+      if (c0 < 0) return -1;
+      if (land[c0]) return c0;
+      const i0 = c0 % W; const j0 = (c0 - i0) / W;
+      for (let r = 1; r <= 4; r += 1) {
+        for (let dj = -r; dj <= r; dj += 1) for (let di = -r; di <= r; di += 1) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+          const i = i0 + di; const j = j0 + dj;
+          if (i >= 0 && i < W && j >= 0 && j < H && land[j * W + i]) return j * W + i;
+        }
+      }
+      return -1;
+    };
+    const regions = ne("ne_10m_geography_regions_polys");
+    const islandRaster = new Int32Array(N); const groupRaster = new Int32Array(N);
+    const islandNames = [""]; const groupNames = [""]; const groupKm2 = [0];
+    for (const feature of regions) {
+      const cls = feature.properties.FEATURECLA;
+      const g = feature.geometry;
+      if (!g || !["Island", "Island group"].includes(cls)) continue;
+      const [raster, names] = cls === "Island" ? [islandRaster, islandNames] : [groupRaster, groupNames];
+      names.push(String(feature.properties.NAME ?? "").trim());
+      if (cls !== "Island") groupKm2.push(0);
+      for (const polygon of g.type === "Polygon" ? [g.coordinates] : g.coordinates) fillRings(raster, polygon, names.length - 1);
+    }
+    for (let c = 0; c < N; c += 1) if (land[c] && groupRaster[c]) groupKm2[groupRaster[c]] += cellKm2((c - (c % W)) / W);
+    const points = ne("ne_10m_geography_regions_points")
+      .filter((f) => /island/i.test(f.properties.featurecla ?? "") && f.geometry?.type === "Point")
+      .map((f) => [String(f.properties.name ?? "").trim(), ...f.geometry.coordinates]);
+    // L'île d'une case : son contour Natural Earth s'il y en a un (deux îles
+    // que la trame soude restent deux îles), sinon sa terre d'un seul tenant.
+    const islandKey = (c) => (islandRaster[c] ? `p${islandRaster[c]}` : `c${comp[c]}`);
+    const citiesByIsland = new Map();
+    for (const city of cellsByCity) {
+      const c = cellNear(city.lng, city.lat);
+      if (c < 0) continue;
+      // Sous son contour d'île et sous sa terre : une province de la frange
+      // côtière, hors du contour (grossier), trouve quand même les villes de l'île.
+      for (const key of new Set([islandKey(c), `c${comp[c]}`])) {
+        if (!citiesByIsland.has(key)) citiesByIsland.set(key, []);
+        citiesByIsland.get(key).push(city);
+      }
+    }
+    const provinceIsland = new Map();
+    for (let c = 0; c < N; c += 1) {
+      if (!land[c] || !labels[c]) continue;
+      const m = provinceIsland.get(labels[c]) ?? new Map();
+      m.set(islandKey(c), (m.get(islandKey(c)) ?? 0) + 1);
+      provinceIsland.set(labels[c], m);
+    }
+    // Une ville du même pays d'abord (une province irlandaise ne prend pas le
+    // nom de Bangor, en Irlande du Nord).
+    const iso2 = new Map(admin0.map((f) => [f.properties.ADM0_A3, f.properties.ISO_A2_EH || f.properties.ISO_A2]));
+    const nearestCityOn = (l, k, [x, y]) => {
+      const key = [...(provinceIsland.get(l) ?? [])].sort((a, b) => b[1] - a[1])[0]?.[0] ?? `c${k}`;
+      const country = /^[A-Z]{2}$/.test(iso2.get(provinces[l - 1]?.country) ?? "") ? iso2.get(provinces[l - 1].country) : "";
+      let best = ""; let bestD = Infinity;
+      for (const city of citiesByIsland.get(key) ?? []) {
+        if (country && city.country !== country) continue;
+        const d = ((city.lng - x) * Math.cos((y * Math.PI) / 180)) ** 2 + (city.lat - y) ** 2;
+        if (d < bestD) { bestD = d; best = city.name; }
+      }
+      return best || (country ? nearestCity([x, y], country) : "");
+    };
+    const report = nameIslands({
+      N, land, labels, comp, compKm2, cellNear, islandRaster, islandNames,
+      groupRaster, groupNames, groupKm2, points, provinces, nearestCityOn,
+    });
+    fs.writeFileSync(path.join(OUT, "islands-report.json"), JSON.stringify(report, null, 1));
+    log(`  îles : ${report.named} nommées, ${report.provinces.filter((p) => p.name !== p.before).length} provinces renommées, ${report.unmatched.length} points de la liste hors d'une île, ${report.conflicts.length} doublons`);
   }
   const cityNames = new Set(provinces.filter((p) => p.city).map((p) => p.name));
   const unnamed = new Map();

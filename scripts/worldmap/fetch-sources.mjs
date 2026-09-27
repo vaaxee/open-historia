@@ -25,6 +25,8 @@ export const SOURCES = [
   ["ne_10m_rivers_lake_centerlines.zip", `${NE}/physical/ne_10m_rivers_lake_centerlines.zip`, 2079507, "fleuves", "Natural Earth, domaine public"],
   ["ne_10m_admin_0_countries.zip", `${NE}/cultural/ne_10m_admin_0_countries.zip`, 4930492, "frontières d'aujourd'hui (lignes guides)", "Natural Earth, domaine public"],
   ["ne_10m_admin_1_states_provinces.zip", `${NE}/cultural/ne_10m_admin_1_states_provinces.zip`, 14909524, "découpage mondial par défaut des états", "Natural Earth, domaine public"],
+  ["ne_10m_geography_regions_polys.zip", `${NE}/physical/ne_10m_geography_regions_polys.zip`, 2038519, "îles et archipels nommés (contours)", "Natural Earth, domaine public"],
+  ["ne_10m_geography_regions_points.zip", `${NE}/physical/ne_10m_geography_regions_points.zip`, 87372, "îles et archipels nommés (points)", "Natural Earth, domaine public"],
   ["cities15000.zip", "https://download.geonames.org/export/dump/cities15000.zip", 3359527, "villes (graines, noms)", "GeoNames, CC BY 4.0"],
   ["world_1200.geojson", `${HB}/world_1200.geojson`, 1.1e6, "lignes guides 1200", "historical-basemaps, GPL-3.0"],
   ["world_1914.geojson", `${HB}/world_1914.geojson`, 1.3e6, "lignes guides 1912-1914", "historical-basemaps, GPL-3.0"],

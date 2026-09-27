@@ -26,6 +26,7 @@ import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "../../server/dataDir.js";
 import { N, cellOf } from "./lib/grid.mjs";
+import { FLAGS_1936 } from "./flags-1936.mjs";
 import { GUIDES_1936, GUIDES_1936_ADMIN1 } from "./guides-1936.mjs";
 
 const scenarioId = process.argv[2];
@@ -90,9 +91,36 @@ export const HB1938 = {
   Egypt: "United Kingdom", Libya: "Italy", "Algeria (France)": "France", Tunisia: "France", "Morocco (France)": "France",
   Iran: "Iran", Hejaz: "Saudi Arabia", "Saudi Arabia": "Saudi Arabia", Hail: "Saudi Arabia", "Emirate of Bin Shal'an": "Saudi Arabia",
 };
+// Les pays que la correction ajoute : couleur et nom sur la carte, et leur fiche
+// pour l'IA (note, alias, étiquette, drapeau), que chaque nouvelle partie sur la
+// carte mondiale reçoit (server/libraryStore.js, createGame).
 export const NEW_OWNERS = {
-  "Free City of Danzig": { color: [196, 164, 110], label: "Dantzig" },
-  "Tangier International Zone": { color: [170, 150, 130], label: "Tanger" },
+  "Free City of Danzig": {
+    color: [196, 164, 110],
+    label: "Dantzig",
+    aliases: ["Danzig", "Free City of Danzig", "Freie Stadt Danzig", "Wolne Miasto Gdańsk", "Gdańsk"],
+    tags: ["non-aligned"],
+    flag: FLAGS_1936["Free City of Danzig"],
+    note: "Semi-autonomous city-state under League of Nations protection since 1920 (Treaty of Versailles), carved out of West Prussia at the mouth of the Vistula. "
+      + "About 410,000 inhabitants, overwhelmingly German-speaking. Poland runs its customs, railways and foreign relations and keeps a munitions depot at Westerplatte; "
+      + "the port competes with Polish Gdynia next door. Senate President Arthur Greiser (NSDAP, since November 1934), Gauleiter Albert Forster; "
+      + "League High Commissioner Seán Lester. The local Nazi party dominates the Senate, harasses the opposition and seeks reunion with Germany.",
+  },
+  "Tangier International Zone": {
+    color: [170, 150, 130],
+    label: "Tanger",
+    aliases: ["Tangier", "Tangier Zone", "Tanger", "Tánger", "Zone internationale de Tanger"],
+    tags: ["non-aligned"],
+    flag: FLAGS_1936["Tangier International Zone"],
+    note: "International zone at the Strait of Gibraltar, under the 1923 Tangier Statute (revised 1928): nominally under the Sultan of Morocco, represented by a Mendoub, "
+      + "but governed by an international Legislative Assembly and a Committee of Control of the consuls of France, Spain, the United Kingdom, Italy, Belgium, the Netherlands, "
+      + "Portugal and Sweden. Administrator: Joseph Le Fur (France). About 60,000 inhabitants (Moroccans, Spaniards, Jews, Europeans). "
+      + "Demilitarised and neutral, with a gendarmerie; a free port and a hub of trade, banking, smuggling and espionage, coveted by Spain and Italy.",
+  },
+};
+const EXTRA_ALIASES = {
+  Danzig: ["Danzig", "Free City of Danzig"], Tangier: ["Tangier", "Tanger", "Tangier Zone"], Ifni: ["Ifni", "Sidi Ifni"],
+  Zara: ["Zara"], Lagosta: ["Lagosta"], Karelia: ["Karelian Isthmus", "Viipuri"], Tuva: ["Tannu Tuva", "Tuva"],
 };
 const EXTRA_OWNER = { Danzig: "Free City of Danzig", Tangier: "Tangier International Zone", Ifni: "Spain", Zara: "Italy", Lagosta: "Italy", Karelia: "Finland", Tuva: "Tannu Tuva" };
 // Pays d'aujourd'hui dont tout le territoire appartenait en 1936 à un seul pays
@@ -167,7 +195,7 @@ for (let k = 0; k < count; k += 1) {
   else if (today === "POL" && p.center[0] >= 18.9 && p.center[0] <= 19.6 && p.center[1] >= 53.6 && p.center[1] <= 54.0 && stateName(k) === "Pomeranian") { owner = "Germany"; rule = "district de Marienwerder"; }
   else if (today === "TUR" && stateName(k) === "Hatay") { owner = "French Syria"; rule = "Sandjak d'Alexandrette (Hatay)"; }
   // Petsamo : la carte de 1938 le donne à la Norvège ; finlandais de 1920 à 1944.
-  else if (today === "RUS" && p.center[1] > 68.8 && p.center[0] < 32.2) { owner = "Finland"; rule = "Petsamo"; }
+  else if (today === "RUS" && p.center[1] > 68.8 && p.center[0] > 27 && p.center[0] < 32.2) { owner = "Finland"; rule = "Petsamo"; }
   // Ukraine occidentale : les oblasts d'aujourd'hui suivent les frontières de
   // 1936 mieux que la carte de 1938 (qui fait la Pocucie roumaine).
   else if (today === "UKR" && UKRAINE_1936[stateName(k)]) { owner = UKRAINE_1936[stateName(k)]; rule = `oblast de ${stateName(k)} en 1936`; }
@@ -190,9 +218,31 @@ const stateOwners = { ...(raw.stateOwners ?? {}) };
 const groups = new Map();
 for (let k = 0; k < count; k += 1) {
   if (owners[k] === raw.owners[k]) continue;
-  const key = `${raw.states[k] || "hors-etat"}~${slug(owners[k])}`;
+  // Un complément 1936 (Dantzig, Ifni, l'isthme de Carélie…) forme son propre état.
+  const key = extra[k + 1] ? `${slug(extra[k + 1])}~${slug(owners[k])}` : `${raw.states[k] || "hors-etat"}~${slug(owners[k])}`;
   if (!groups.has(key)) groups.set(key, []);
   groups.get(key).push(k);
+}
+// Un morceau fait de parties éloignées (Kwidzyn en Prusse-Orientale et Głogów en
+// Silésie, venus d'une même ancienne région) donne un état par partie d'un seul
+// tenant (voisinages terrestres) : la plus grande garde le numéro, les autres
+// prennent « -2 », « -3 »…
+const adjacency = readJson(path.join(WM, "v1", "adjacency.json"));
+for (const [key, ks] of [...groups]) {
+  const set = new Set(ks); const seen = new Set(); const parts = [];
+  for (const start of ks) {
+    if (seen.has(start)) continue;
+    const part = []; const stack = [start]; seen.add(start);
+    while (stack.length) {
+      const k = stack.pop(); part.push(k);
+      for (const [n] of adjacency[k + 1] ?? []) if (set.has(n - 1) && !seen.has(n - 1)) { seen.add(n - 1); stack.push(n - 1); }
+    }
+    parts.push(part);
+  }
+  if (parts.length < 2) continue;
+  parts.sort((a, b) => b.length - a.length);
+  groups.set(key, parts[0]);
+  parts.slice(1).forEach((part, n) => groups.set(`${key}-${n + 2}`, part));
 }
 for (const [key, ks] of groups) {
   const best = ks.map((k) => provinces[k]).sort((a, b) => (b.population || 0) - (a.population || 0))[0];
@@ -203,6 +253,39 @@ for (const [key, ks] of groups) {
 for (const [state, info] of Object.entries(stateInfo)) {
   const n = states.filter((s) => s === state).length;
   if (!n) delete stateInfo[state]; else info.provinces = n;
+}
+// Les noms des états, après la correction (l'IA les lit : « Province #BBBBBB »
+// ne lui dit rien) : la ville la plus peuplée ; sinon la région admin-1
+// majoritaire ; sinon la province la plus grande. Uniques : un doublon prend
+// sa région admin-1, puis son pays, entre parenthèses.
+{
+  const members = new Map();
+  states.forEach((state, k) => { if (state) { if (!members.has(state)) members.set(state, []); members.get(state).push(k); } });
+  const base = new Map(); const admin = new Map();
+  for (const [state, ks] of members) {
+    const byPopulation = ks.map((k) => provinces[k]).filter((p) => p.city).sort((a, b) => (b.population || 0) - (a.population || 0));
+    const votes = new Map();
+    for (const k of ks) votes.set(stateName(k), (votes.get(stateName(k)) ?? 0) + provinces[k].areaKm2);
+    const region = [...votes].filter(([n]) => n).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+    const largest = ks.map((k) => provinces[k]).sort((a, b) => b.areaKm2 - a.areaKm2)[0];
+    admin.set(state, region);
+    const extraName = EXTRA_ALIASES[extra[ks[0] + 1]]?.[0];
+    base.set(state, byPopulation[0]?.city || extraName || region || largest.name.replace(/ – \d+$/, ""));
+  }
+  const count = new Map();
+  for (const name of base.values()) count.set(name, (count.get(name) ?? 0) + 1);
+  const taken = new Set();
+  for (const [state, name] of base) {
+    let final = name;
+    if (count.get(name) > 1 && admin.get(state) && admin.get(state) !== name) final = `${name} (${admin.get(state)})`;
+    if (taken.has(final)) final = `${name} (${stateOwners[state] || owners[members.get(state)[0]]})`;
+    for (let n = 2; taken.has(final); n += 1) final = `${name} ${n}`;
+    taken.add(final);
+    // Les autres noms d'un état des compléments 1936 (« Danzig » pour Gdańsk),
+    // pour que l'IA le trouve sous le nom de l'époque.
+    const aliases = [...new Set(members.get(state).map((k) => EXTRA_ALIASES[extra[k + 1]]).filter(Boolean).flat())].filter((n) => n !== final);
+    stateInfo[state] = { ...(stateInfo[state] ?? {}), name: final, provinces: members.get(state).length, ...(aliases.length ? { aliases } : {}) };
+  }
 }
 
 fs.writeFileSync(outFile, JSON.stringify({
@@ -232,7 +315,7 @@ const CHECKS = [
   ["Pologne", [["Varsovie", 21.01, 52.23, "Poland"], ["Gdynia", 18.53, 54.52, "Poland"], ["Posen", 16.93, 52.41, "Poland"], ["Katowice", 19.02, 50.26, "Poland"],
     ["Wilno", 25.28, 54.69, "Poland"], ["Lwów", 24.03, 49.84, "Poland"], ["Stanisławów", 24.71, 48.92, "Poland"], ["Kołomyja", 25.04, 48.53, "Poland"], ["Czernowitz", 25.94, 48.29, "Romania"], ["Tarnopol", 25.59, 49.55, "Poland"]]],
   ["Italie", [["Pola (Istrie)", 13.85, 44.87, "Italy"], ["Trieste", 13.77, 45.65, "Italy"], ["Fiume", 14.44, 45.33, "Italy"], ["Zara", 15.23, 44.12, "Italy"], ["Rhodes", 28.2, 36.4, "Italy"]]],
-  ["Finlande", [["Vyborg", 28.75, 60.71, "Finland"], ["Isthme de Carélie (Terijoki)", 29.7, 60.18, "Finland"], ["Kivennapa", 30.1, 60.33, "Finland"], ["Sertolovo (Rautu)", 30.38, 60.65, "Finland"], ["Sestroretsk (URSS)", 29.95, 60.08, "Soviet Union"], ["Petsamo", 31.18, 69.55, "Finland"]]],
+  ["Finlande", [["Vyborg", 28.75, 60.71, "Finland"], ["Isthme de Carélie (Terijoki)", 29.7, 60.18, "Finland"], ["Kivennapa", 30.1, 60.33, "Finland"], ["Sertolovo (Rautu)", 30.38, 60.65, "Finland"], ["Sestroretsk (URSS)", 29.95, 60.08, "Soviet Union"], ["Petsamo", 31.18, 69.55, "Finland"], ["Île Wrangel (URSS)", -178.9, 71.26, "Soviet Union"], ["Tchoukotka (URSS)", -175.6, 71.37, "Soviet Union"]]],
   ["Maroc, Afrique, Levant", [["Tétouan", -5.37, 35.57, "Spain"], ["Nador", -2.93, 35.17, "Spain"], ["Al Hoceïma (Rif)", -3.93, 35.25, "Spain"], ["Ifni", -10.17, 29.38, "Spain"],
     ["Tanger", -5.8, 35.77, "Tangier International Zone"], ["Djibouti", 43.15, 11.59, "France"], ["Tadjoura", 42.88, 11.79, "France"], ["Antioche (Hatay)", 36.16, 36.2, "French Syria"], ["Amman", 35.93, 31.95, "British Transjordan"],
     ["Aydın (Anatolie)", 27.84, 37.85, "Turkey"], ["Mardin", 40.73, 37.31, "Turkey"], ["Khoy (Iran)", 44.95, 38.55, "Iran"], ["Koweït", 47.98, 29.37, "British Kuwait"]]],
@@ -263,6 +346,13 @@ const report = {
   checks,
   differences: [...differences.values()].sort((a, b) => b.km2 - a.km2).map((d) => ({ ...d, rules: [...d.rules] })),
   changedOutsideEuropeMed: owners.filter((o, k) => o !== raw.owners[k] && !inEuropeMed(provinces[k].center)).length,
+  // Le détail, par règle : une règle qui déborde de sa région se voit ici.
+  outsideEuropeMed: Object.entries(owners.reduce((acc, o, k) => {
+    if (o === raw.owners[k] || inEuropeMed(provinces[k].center)) return acc;
+    const key = `${raw.owners[k] || "?"} → ${o} (${rules[k]})`;
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {})).map(([change, count]) => ({ change, provinces: count })),
   autoMap,
 };
 fs.writeFileSync(path.join(dir, "corrections-1936.json"), JSON.stringify(report, null, 2));

@@ -43,7 +43,8 @@ import {
   writeRuntimeJsonAsset,
 } from "./libraryStore.js";
 import { ensureActiveProvinces } from "./hoiProvinces.js";
-import { registerWorldMapRoutes } from "./worldMap.js";
+import { activeGameWorldMapFile, registerWorldMapRoutes } from "./worldMap.js";
+import { ensureStatesGeojson } from "./worldMapStates.js";
 import { registerWorldMapSurfaceRoutes } from "./worldMapSurfaces.js";
 import {
   createMapEditorDocument,
@@ -804,6 +805,13 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
     // Scenario geometry is served untransformed, so parsing it only to
     // re-serialise blocked the event loop for seconds on a 55 MB file. A null
     // sourcePath means no custom geometry: fall through to the empty payload.
+    // Une partie sur la carte mondiale : ses régions sont les états de la carte.
+    const worldMapFile = req.params.assetKey === "regionsGeojson" ? activeGameWorldMapFile() : null;
+    const statesPath = worldMapFile ? ensureStatesGeojson(worldMapFile) : null;
+    if (statesPath) {
+      streamBinaryFile(req, res, statesPath, "application/json; charset=utf-8");
+      return;
+    }
     const geojson = resolveRuntimeGeojsonAsset(req.params.assetKey);
     if (geojson?.sourcePath) {
       streamBinaryFile(req, res, geojson.sourcePath, geojson.contentType);

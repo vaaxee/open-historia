@@ -211,6 +211,12 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
   - `states-default.json` : découpage mondial par défaut en états, d'après l'admin-1 de Natural Earth ;
   - `meta.json`.
 - **Numéros** : les provinces terrestres vont de 1 à n (≈ 13 100). Les numéros de 20 000 à 29 999 sont réservés aux zones maritimes.
+- **Noms** : la plus grande ville de la province ; sinon la ville la plus proche du même pays (« Ville – n »).
+- **Noms d'îles** (`scripts/worldmap/islands.mjs`) : une province faite d'une île entière porte le nom de l'île (Bornholm, Sylt, Pantelleria, Madeira…), pas celui de la ville la plus proche, souvent d'un autre pays (Ystad, Tønder, Kélibia).
+  - Les noms viennent de Natural Earth (contours et points d'îles, archipels) et d'une liste de ≈ 200 îles d'Europe et de Méditerranée, chacune repérée par un point.
+  - Une province sans ville qui détient la plus grande part d'une petite île prend son nom ; sur une grande île découpée, une province sans ville prend la ville la plus proche de la même île et du même pays.
+  - Une île que la trame soude au continent (Rügen, Djerba…) garde le nom de la ville de sa province.
+  - Le rapport : `node scripts/worldmap/islands-report.mjs > iles.md` (les 239 provinces insulaires d'Europe et de Méditerranée).
 
 ### Étape B : le rendu (en cours)
 
@@ -248,13 +254,23 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
   - Une province qui change de pays quitte son ancien état.
 - **Propriétaires de départ** : `stateOwners` donne le propriétaire de chaque état au départ. Une partie qui recopie le scénario ne change donc rien ; seul ce qui en diffère compte.
 - **Mer** : une nappe opaque (`worldmap-sea`) sous les provinces recouvre l'ancienne carte politique, dont les côtes mal calées dépassaient en mer (les zones pâles au large de l'Espagne, du Maroc, de la Crimée…).
+- **Noms des états** : recalculés après la correction (l'IA les lit ; « Province #BBBBBB » ne lui disait rien) : la ville la plus peuplée de l'état, sinon sa région admin-1, rendus uniques.
+- **Nouveaux pays** (`NEW_OWNERS` dans `correct-1936.mjs`) : la Ville libre de Dantzig et la Zone internationale de Tanger ont couleur, nom sur la carte, alias, étiquette, note historique pour l'IA et drapeau (`scripts/worldmap/flags-1936.mjs`, dessinés en PNG ; celui de Tanger est simplifié).
 - **WW2+ 1936** : l'ancien scénario donne à la Pologne ses frontières d'après 1945 (Poméranie, Silésie, sud de la Prusse-Orientale) ; la correction à 1936 le répare, sans toucher au scénario d'origine.
+
+### Étape E : l'IA sur la nouvelle carte
+
+- **Parties sur la carte mondiale** : une nouvelle partie créée d'un scénario converti (`provinces.v1.json`) porte `worldMap: "v1"` (`game-instance.json`, posé par `createGame`). Les parties d'avant ne l'ont pas et restent sur l'ancienne carte ; rien n'est migré.
+- **Régions = états** : pour ces parties, `/api/runtime/json/regionsGeojson` sert les états de la carte mondiale (`server/worldMapStates.js`) : la réunion de leurs provinces, sur la trame à 0,1°, avec numéro, nom et propriétaire de départ. Le fichier `states.v1.geojson` est écrit une fois à côté du scénario et refait quand le scénario ou la carte changent.
+  - Tout ce qui lit les régions passe donc aux états sans autre changement : transferts et contrôle de territoire (`regionTransfers`, `regionControlOps`), recherche des lieux, description de la carte et dossiers de pays dans les prompts, clics sur la carte.
+- **Départ d'une partie** : `regionOwnershipOverrides` reçoit le propriétaire de chaque état (les anciennes régions sans province en sortent, les morceaux détachés en 1936 y entrent) ; les nouveaux pays reçoivent leur fiche (`world.polityOverrides`, `ownerCodes`, `colors.json`, `flags.json`, `tags.json`).
+- **Affichage** : la carte mondiale s'affiche d'elle-même dans ces parties (`/api/worldmap/status` renvoie `game: true`) ; `?worldmap=off` la cache.
 
 ### Sources et licences
 
 | Source | Usage | Licence |
 |---|---|---|
-| Natural Earth 10 m | terres, îles, lacs, fleuves, frontières d'aujourd'hui, admin-1 | domaine public |
+| Natural Earth 10 m | terres, îles, lacs, fleuves, frontières d'aujourd'hui, admin-1, noms d'îles et d'archipels | domaine public |
 | GeoNames `cities15000` | graines, noms, population | CC BY 4.0 |
 | historical-basemaps (aourednik) | lignes guides 1200, 1914, 1938 | GPL-3.0 |
 | Terrain Tiles (AWS, Mapzen), zoom 5 | relief, terrain | ouverte, attribution Mapzen : <https://github.com/tilezen/joerd/blob/master/docs/attribution.md> |

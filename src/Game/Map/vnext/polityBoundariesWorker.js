@@ -248,6 +248,8 @@ const buildMetadata = (regions) => {
       tags: toStringArray(props.tags),
       type: props.type ? String(props.type) : "",
       adjacencies: toStringArray(props.adjacencies),
+      // Other names of the region (a world-map state: « Danzig » for Gdańsk).
+      aliases: toStringArray(props.aliases),
     });
   }
 

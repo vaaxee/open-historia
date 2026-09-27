@@ -7,10 +7,13 @@
 // (runtime/worldmap/borders.js). Les noms de pays sont placés par Nations.jsx
 // sur la réunion des provinces de chaque pays (worldMapStore.js).
 //
-// Deux aperçus (?worldmap=… dans l'adresse, ou localStorage["oh:worldmap"]) :
+// Une partie créée sur la carte mondiale (étape E : ses régions sont les états
+// de la carte) l'affiche toujours, en mode scenario. Sinon, deux aperçus
+// (?worldmap=… dans l'adresse, ou localStorage["oh:worldmap"]) :
 //   today     les pays d'aujourd'hui (Natural Earth)
 //   scenario  le scénario actif converti (provinces.v1.json), avec les
 //             changements de territoire de la partie (par état)
+// ?worldmap=off la cache.
 // Opaque, la carte couvre l'ancienne carte politique ; noms, villes, bâtiments
 // et unités restent au-dessus.
 
@@ -56,10 +59,20 @@ const selectOverrides = (world) => world?.regionOwnershipOverrides ?? null;
 const WorldMapLayer = () => {
   const { current: mapRef } = useMap();
   const map = mapRef?.getMap?.() ?? mapRef;
-  const [mode] = useState(worldMapPreviewMode);
+  const [mode, setMode] = useState(worldMapPreviewMode);
   const [data, setData] = useState(null);
   const overrides = useRuntimeState("world", selectOverrides);
   const applied = useRef({ owners: null, source: null });
+
+  // La partie se joue-t-elle sur la carte mondiale ?
+  useEffect(() => {
+    if (mode) return undefined;
+    let alive = true;
+    fetchJson("/api/worldmap/status")
+      .then((status) => { if (alive && status?.available && status.game) setMode("scenario"); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [mode]);
 
   useEffect(() => {
     if (mode !== "today" && mode !== "scenario") return undefined;
