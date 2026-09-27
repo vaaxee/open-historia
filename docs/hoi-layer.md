@@ -179,7 +179,7 @@ Au chargement d'une partie, un complexe industriel de départ revient aux vraies
 
 Modèle de HOI4 : une seule carte de provinces, géographiquement juste, commune à tous les scénarios ; un scénario ne fera plus qu'attribuer les provinces à des pays et à des états. La génération par scénario de la phase 4 sera retirée une fois la bascule faite.
 
-### Étape A : la carte (faite)
+### Étape A : la carte (faite, poussée)
 
 Générée une fois, hors du jeu et hors du dépôt, dans `server/data/worldmap/` :
 
@@ -211,6 +211,21 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
   - `states-default.json` : découpage mondial par défaut en états, d'après l'admin-1 de Natural Earth ;
   - `meta.json`.
 - **Numéros** : les provinces terrestres vont de 1 à n (≈ 13 100). Les numéros de 20 000 à 29 999 sont réservés aux zones maritimes.
+
+### Étape B : le rendu (en cours)
+
+- **Tuiles** : `node --max-old-space-size=12000 scripts/worldmap/tiles.mjs` écrit les tuiles vectorielles dans `server/data/worldmap/v1/tiles/` (≈ 27 600 tuiles, 47 Mo, zooms 0 à 8, 1 minute).
+  - Deux couches : `provinces` (id = numéro de province) et `arcs` (les 33 500 limites entre deux provinces a et b, coupées à la côte, repérées quand elles longent un très grand fleuve).
+  - `arcs-index.json` en donne la liste sans géométrie.
+- **Serveur** : `server/worldMap.js` sert `/api/worldmap/status`, les tuiles (204 si vide) et une liste fermée de fichiers de `v1/`.
+- **Jeu** : `src/Game/Map/WorldMapLayer.jsx` colorie chaque province par « feature-state ». La géométrie ne change jamais.
+  - Une limite devient frontière d'état ou de pays quand ses deux provinces n'ont pas le même état ou le même propriétaire (`src/runtime/worldmap/borders.js`).
+  - Ce ne sont donc que les frontières déduites des voisinages : une conquête ne fera que recolorier.
+- **Aperçu** : `?worldmap=today` dans l'adresse, ou `localStorage["oh:worldmap"] = "today"`, colorie la carte avec les pays d'aujourd'hui (Natural Earth). Elle couvre alors l'ancienne carte politique ; noms, villes et unités restent au-dessus. Pour l'enlever : `localStorage.removeItem("oh:worldmap")`.
+- **Pas encore** :
+  - le site web, où `/api` n'existe que dans la page et où les tuiles devront passer par une copie accessible aux workers ;
+  - les lacs de moins de 3 000 km², qui sont des terres ;
+  - les noms de pays, qui viennent encore de l'ancienne carte.
 
 ### Sources et licences
 

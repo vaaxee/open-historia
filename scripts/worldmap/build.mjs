@@ -861,6 +861,26 @@ log(`  ${provinceCount} provinces`);
 // de 1°, grands lacs retirés).
 // ---------------------------------------------------------------------------
 export const COAST_BUFFER = 3;
+const pointInRing = ([x, y], ring) => {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, yi] = ring[i]; const [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+};
+// Part des arêtes d'un arc (en trame) qui longent un très grand fleuve.
+const riverShare = (points) => {
+  let along = 0;
+  for (let k = 0; k < points.length - 1; k += 1) {
+    const [x0, y0] = points[k]; const [x1, y1] = points[k + 1];
+    const cells = y0 === y1
+      ? [[Math.min(x0, x1), y0 - 1], [Math.min(x0, x1), y0]]
+      : [[x0 - 1, Math.min(y0, y1)], [x0, Math.min(y0, y1)]];
+    if (cells.some(([x, y]) => x >= 0 && y >= 0 && x < W && y < H && bigRiver[y * W + x])) along += 1;
+  }
+  return points.length > 1 ? along / (points.length - 1) : 0;
+};
 const TILE = 1;
 
 // Découpe d'un anneau par un rectangle (Sutherland-Hodgman).
@@ -959,8 +979,10 @@ if (!fs.existsSync(shapesFile)) {
   const arcs = traceArcs(extended);
   log(`  ${arcs.length} arcs tracés (${((Date.now() - started) / 1000).toFixed(0)} s)`);
   const pieces = new Map();
+  const interior = []; // arcs entre deux provinces de terre : les limites à dessiner
   for (const arc of arcs) {
     const points = smoothArc(arc, { tolerance: 0.8, passes: 2 }).map(toLngLat);
+    if (arc.left && arc.right) interior.push({ left: arc.left, right: arc.right, points, river: riverShare(arc.points) >= 0.5 ? 1 : 0 });
     if (arc.left) {
       if (!pieces.has(arc.left)) pieces.set(arc.left, []);
       pieces.get(arc.left).push({ points, closed: arc.closed });
@@ -1007,6 +1029,33 @@ if (!fs.existsSync(shapesFile)) {
   }
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(shapesFile, JSON.stringify({ type: "FeatureCollection", features }));
+  // Les limites (arcs.geojson) : chaque arc entre deux provinces, sans ses bouts
+  // en mer (la province déborde en mer avant d'être découpée sur la côte) ; un
+  // segment est gardé si son milieu est dans l'une de ses deux provinces.
+  const polygonsById = new Map(features.map((f) => [f.properties.id, f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates]));
+  const inside = (point, polygons) => (polygons ?? []).some((polygon) => pointInRing(point, polygon[0]) && !polygon.slice(1).some((hole) => pointInRing(point, hole)));
+  const arcFeatures = [];
+  interior.forEach(({ left, right, points, river }) => {
+    const needsClip = coastal[left] || coastal[right];
+    const runs = [];
+    let run = [];
+    for (let k = 0; k < points.length - 1; k += 1) {
+      const a = points[k]; const b = points[k + 1];
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const keep = !needsClip || inside(mid, polygonsById.get(left)) || inside(mid, polygonsById.get(right));
+      if (keep) { if (!run.length) run.push(a); run.push(b); } else if (run.length) { runs.push(run); run = []; }
+    }
+    if (run.length) runs.push(run);
+    if (!runs.length) return;
+    arcFeatures.push({
+      type: "Feature",
+      id: arcFeatures.length + 1,
+      properties: { a: Math.min(left, right), b: Math.max(left, right), river },
+      geometry: runs.length === 1 ? { type: "LineString", coordinates: runs[0] } : { type: "MultiLineString", coordinates: runs },
+    });
+  });
+  fs.writeFileSync(path.join(OUT, "arcs.geojson"), JSON.stringify({ type: "FeatureCollection", features: arcFeatures }));
+  log(`  ${arcFeatures.length} limites écrites (arcs.geojson)`);
   log(`  ${features.length} provinces écrites, ${empty} vides, ${broken} anneaux ouverts, ${clipFailed} découpes ratées (${((Date.now() - started) / 1000).toFixed(0)} s)`);
 }
 
@@ -1105,6 +1154,36 @@ log("Attributs…");
     const neighbour = [...(adjacency.get(l)?.keys() ?? [])].find((m) => stateOf[m]);
     if (neighbour) { stateOf[l] = stateOf[neighbour]; states[stateOf[l]].provinces.push(l); }
   }
+  // Pays d'aujourd'hui (Natural Earth) : la coloration de test de l'étape B et
+  // la base de la carte moderne.
+  const admin0 = ne("ne_10m_admin_0_countries");
+  const admin0Raster = new Int32Array(N);
+  admin0.forEach((feature, k) => {
+    const g = feature.geometry;
+    for (const polygon of g.type === "Polygon" ? [g.coordinates] : g.coordinates) fillRings(admin0Raster, polygon, k + 1);
+  });
+  const countryVotes = new Map();
+  for (let c = 0; c < N; c += 1) {
+    const l = labels[c];
+    if (!land[c] || !l || !admin0Raster[c]) continue;
+    const k = l * 1024 + admin0Raster[c];
+    countryVotes.set(k, (countryVotes.get(k) ?? 0) + 1);
+  }
+  const countryOf = new Array(count + 1).fill(null);
+  const bestVote = new Array(count + 1).fill(0);
+  for (const [k, v] of countryVotes) {
+    const l = Math.floor(k / 1024);
+    if (v > bestVote[l]) { bestVote[l] = v; countryOf[l] = admin0[(k % 1024) - 1].properties; }
+  }
+  const countries = {};
+  for (let l = 1; l <= count; l += 1) {
+    const c = countryOf[l];
+    if (!c) continue;
+    const code = c.ADM0_A3;
+    if (!countries[code]) countries[code] = { name: c.ADMIN, color: Number(c.MAPCOLOR9) || 0, provinces: 0 };
+    countries[code].provinces += 1;
+  }
+
   // Noms : la ville ; sinon la ville la plus proche, « Ville – n », uniques.
   const cellsByCity = cityList.filter((city) => city.population >= 15000);
   const grid = new Map();
@@ -1151,6 +1230,7 @@ log("Attributs…");
       center,
       elevation: elevationStats.mean,
       state: stateOf[l],
+      country: countryOf[l]?.ADM0_A3 ?? "",
     });
   }
   const cityNames = new Set(provinces.filter((p) => p.city).map((p) => p.name));
@@ -1199,6 +1279,7 @@ log("Attributs…");
   fs.writeFileSync(path.join(OUT, "adjacency.json"), JSON.stringify(adjacencyOut));
   fs.writeFileSync(path.join(OUT, "states-default.json"), JSON.stringify({ states, provinceState: Object.fromEntries(provinces.filter((p) => !p.empty).map((p) => [p.id, p.state])) }));
   fs.writeFileSync(path.join(OUT, "meta.json"), JSON.stringify(meta, null, 2));
+  fs.writeFileSync(path.join(OUT, "countries-today.json"), JSON.stringify(countries));
   log(`  ${provinces.length} provinces, ${Object.keys(states).length} états par défaut, terrains ${JSON.stringify(terrains)} (${((Date.now() - started) / 1000).toFixed(0)} s)`);
 }
 

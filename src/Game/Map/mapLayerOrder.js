@@ -35,6 +35,12 @@ export const MAP_LAYER_ORDER = [
   "polity-boundaries-shadow",
   "polity-boundaries",
 
+  // Carte mondiale unique (phase 5) : opaque, elle couvre l'ancienne carte
+  // politique quand elle est active ; les noms et les objets restent au-dessus.
+  "worldmap-fill",
+  "worldmap-province-lines",
+  "worldmap-country-borders",
+
   // Draped standing-order lines belong above map cartography but below symbols.
   "units-heading",
   "units-station",

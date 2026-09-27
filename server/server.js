@@ -43,6 +43,7 @@ import {
   writeRuntimeJsonAsset,
 } from "./libraryStore.js";
 import { ensureActiveProvinces } from "./hoiProvinces.js";
+import { registerWorldMapRoutes } from "./worldMap.js";
 import {
   createMapEditorDocument,
   deleteMapEditorDocument,
@@ -779,6 +780,8 @@ app.delete("/api/scenarios/:scenarioId", (req, res) => {
 
 // Couche HOI4, phase 4 : les provinces du scénario actif (server/hoiProvinces.js),
 // générées une fois et gardées en cache. {} pour une carte sans régions GeoJSON.
+registerWorldMapRoutes(app);
+
 app.get("/api/hoi/provinces", (req, res) => {
   try {
     const file = ensureActiveProvinces();
