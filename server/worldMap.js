@@ -4,10 +4,14 @@
 //   GET /api/worldmap/status                   { available, version, provinces, … }
 //   GET /api/worldmap/v1/tiles/:z/:x/:y.pbf    tuiles vectorielles (204 si vide)
 //   GET /api/worldmap/v1/:file                 attributs (liste fermée ci-dessous)
+//   GET /api/worldmap/scenario                 le scénario actif sur la carte mondiale
+//                                              (provinces.v1.json, écrit par
+//                                              scripts/worldmap/convert-scenario.mjs), 404 sinon
 
 import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "./dataDir.js";
+import { resolveRuntimeGeojsonAsset } from "./libraryStore.js";
 
 export const WORLD_MAP_DIR = path.join(DATA_DIR, "worldmap", "v1");
 export const WORLD_MAP_FILES = Object.freeze([
@@ -36,7 +40,22 @@ export const worldMapStatus = () => {
 
 const int = (value) => (/^\d{1,3}$/.test(String(value)) ? Number(value) : null);
 
+// Le fichier de la carte mondiale du scénario actif : à côté de ses régions.
+export const activeScenarioWorldMapFile = () => {
+  const regions = resolveRuntimeGeojsonAsset("regionsGeojson")?.sourcePath;
+  if (!regions) return null;
+  const file = path.join(path.dirname(regions), "provinces.v1.json");
+  return fs.existsSync(file) ? file : null;
+};
+
 export const registerWorldMapRoutes = (app) => {
+  app.get("/api/worldmap/scenario", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const file = activeScenarioWorldMapFile();
+    if (!file) return res.status(404).json({ available: false });
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return fs.createReadStream(file).pipe(res);
+  });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(worldMapStatus());

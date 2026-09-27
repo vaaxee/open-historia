@@ -24,6 +24,7 @@
 
 import fs from "fs";
 import path from "path";
+import zlib from "zlib";
 import { DATA_DIR } from "../../server/dataDir.js";
 import { decodePng } from "../../server/hoiElevation.js";
 import { classifyTerrain, provinceSlots } from "../../server/hoiTerrain.js";
@@ -71,7 +72,7 @@ const ringKm2 = (ring) => {
 // ---------------------------------------------------------------------------
 // land : 1 = terre, 0 = eau
 // ---------------------------------------------------------------------------
-export const LAKE_MIN_KM2 = 3000;
+export const LAKE_MIN_KM2 = 300; // le Léman, les lacs de Constance, Balaton, de Garde apparaissent
 log("Terres et eaux…");
 const land = cached(WORK, "land", Uint8Array, () => {
   const out = new Uint8Array(N);
@@ -1280,6 +1281,28 @@ log("Attributs…");
   fs.writeFileSync(path.join(OUT, "states-default.json"), JSON.stringify({ states, provinceState: Object.fromEntries(provinces.filter((p) => !p.empty).map((p) => [p.id, p.state])) }));
   fs.writeFileSync(path.join(OUT, "meta.json"), JSON.stringify(meta, null, 2));
   fs.writeFileSync(path.join(OUT, "countries-today.json"), JSON.stringify(countries));
+  // Trame des provinces à 0,1° (la province majoritaire de chaque carré de 2 × 2
+  // cases), compressée : le serveur y fusionne les provinces d'un même pays
+  // pour placer les noms (server/worldMapSurfaces.js).
+  {
+    const GW = W / 2; const GH = H / 2;
+    const grid = new Uint16Array(GW * GH);
+    for (let gy = 0; gy < GH; gy += 1) {
+      for (let gx = 0; gx < GW; gx += 1) {
+        const votes = new Map();
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+          const c = (gy * 2 + dy) * W + gx * 2 + dx;
+          if (land[c] && labels[c]) votes.set(labels[c], (votes.get(labels[c]) ?? 0) + 1);
+        }
+        let best = 0; let bestVotes = 0;
+        for (const [l, v] of votes) if (v > bestVotes || (v === bestVotes && l < best)) { best = l; bestVotes = v; }
+        grid[gy * GW + gx] = best;
+      }
+    }
+    fs.writeFileSync(path.join(OUT, "grid-0.1.bin.gz"), zlib.gzipSync(Buffer.from(grid.buffer)));
+    meta.coarseGrid = { file: "grid-0.1.bin.gz", width: GW, height: GH, step: STEP * 2, latTop: 84 };
+    fs.writeFileSync(path.join(OUT, "meta.json"), JSON.stringify(meta, null, 2));
+  }
   log(`  ${provinces.length} provinces, ${Object.keys(states).length} états par défaut, terrains ${JSON.stringify(terrains)} (${((Date.now() - started) / 1000).toFixed(0)} s)`);
 }
 

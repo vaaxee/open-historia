@@ -224,8 +224,23 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
 - **Aperçu** : `?worldmap=today` dans l'adresse, ou `localStorage["oh:worldmap"] = "today"`, colorie la carte avec les pays d'aujourd'hui (Natural Earth). Elle couvre alors l'ancienne carte politique ; noms, villes et unités restent au-dessus. Pour l'enlever : `localStorage.removeItem("oh:worldmap")`.
 - **Pas encore** :
   - le site web, où `/api` n'existe que dans la page et où les tuiles devront passer par une copie accessible aux workers ;
-  - les lacs de moins de 3 000 km², qui sont des terres ;
-  - les noms de pays, qui viennent encore de l'ancienne carte.
+  - les lacs de moins de 300 km², qui sont des terres.
+
+### Étape C : les scénarios (en cours)
+
+- **Format** : `provinces.v1.json` dans le dossier du scénario.
+  - Contenu : `mapVersion`, `owners[]` et `states[]` (l'élément k est la province k + 1), `stateInfo{}` (nom de chaque état).
+  - Pas de géométrie.
+- **Conversion** : `node --max-old-space-size=8192 scripts/worldmap/convert-scenario.mjs <scénario>`.
+  - Chaque province prend la région de l'ancien scénario qui couvre la plus grande part de sa surface ; son propriétaire devient celui de la province, la région devient son état.
+  - Les états gardent donc les identifiants des anciennes régions : les changements de territoire d'une partie (`regionOwnershipOverrides`, par région) s'appliquent tels quels à la nouvelle carte.
+  - Correctif « morceaux » : les provinces voisines de même pays en 1938 et aujourd'hui forment un morceau, qui prend le propriétaire qui y tient au moins 75 % de la surface.
+  - Les îlots hors de l'ancienne carte prennent la province attribuée la plus proche.
+  - Les doutes vont dans `conversion-v1.json`, lisibles avec `scripts/worldmap/conversion-report.mjs`.
+- **Noms de pays** : le serveur réunit les provinces de chaque propriétaire (`POST /api/worldmap/surfaces`, `server/worldMapSurfaces.js`, sur une trame à 0,1°). Le moteur de noms du jeu les place et les courbe sur ces formes, dans un travailleur à part (`vnext/worldMapLabelsWorker.js`).
+- **Aperçu** : `?worldmap=scenario` (ou `localStorage["oh:worldmap"] = "scenario"`) montre le scénario actif converti, avec les changements de la partie. `today` montre les pays d'aujourd'hui.
+- **Lacs** : ceux de plus de 300 km² sont de l'eau (Léman, Constance, Balaton, Garde).
+- **WW2+ 1936** : converti (13 175 provinces, 95 pays, 1 005 états). Attention, ce scénario donne à la Pologne ses frontières d'après 1945 (Poméranie, Silésie, sud de la Prusse-Orientale) : pas de corridor de Dantzig. La conversion le reproduit fidèlement.
 
 ### Sources et licences
 

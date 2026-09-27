@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { BORDER_KIND, TODAY_PALETTE, arcKind, arcsTouching, todayColour } from "./borders.js";
+import { BORDER_KIND, TODAY_PALETTE, arcKind, arcsTouching, changedProvinces, provinceOwners, todayColour } from "./borders.js";
 
 const owner = { 1: "FRA", 2: "FRA", 3: "DEU" };
 const state = { 1: "Alsace", 2: "Lorraine", 3: "Bade" };
@@ -29,4 +29,12 @@ test("une province qui change de mains ne touche que ses limites", () => {
 test("couleurs : numéro de carte, sinon neutre", () => {
   assert.equal(todayColour({ color: 3 }), TODAY_PALETTE[3]);
   assert.equal(todayColour(undefined), TODAY_PALETTE[0]);
+});
+
+test("propriétaires : le scénario, puis les changements de la partie par état", () => {
+  const scenario = { owners: ["France", "France", "Germany"], states: ["alsace", "paris", "bade"] };
+  assert.deepEqual(provinceOwners(scenario), ["France", "France", "Germany"]);
+  const owners = provinceOwners(scenario, { alsace: "Germany" });
+  assert.deepEqual(owners, ["Germany", "France", "Germany"]);
+  assert.deepEqual(changedProvinces(provinceOwners(scenario), owners), [1]);
 });

@@ -33,6 +33,7 @@ import {
   summarizePolityLabelDiagnostics,
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
+import { getWorldMapState, useWorldMapState } from "./worldMapStore.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useWorldState } from "./useWorldState.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
@@ -1367,6 +1368,48 @@ const WorldMap = ({ isGlobe = false }) => {
   const workerLabelNamesRef = useRef(workerLabelNames);
   workerLabelNamesRef.current = workerLabelNames;
 
+  // Carte mondiale unique (phase 5) : quand elle est active, les noms de pays
+  // sont placés sur la réunion des provinces de chaque pays (formes calculées
+  // par le serveur, noms placés hors du fil de l'écran), et ceux de l'ancienne
+  // carte ne sont plus publiés.
+  const worldMap = useWorldMapState();
+  useEffect(() => {
+    if (!worldMap.active || !worldMap.owners) return undefined;
+    let alive = true;
+    let worker = null;
+    const owners = worldMap.owners;
+    (async () => {
+      const response = await fetch("/api/worldmap/surfaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owners }),
+      });
+      if (!response.ok) throw new Error(`surfaces : HTTP ${response.status}`);
+      const surfaces = await response.json();
+      if (!alive) return;
+      const names = {};
+      for (const owner of new Set(owners.filter(Boolean))) {
+        const canonical = toCountryName(owner);
+        names[owner] = workerLabelNamesRef.current?.[canonical]
+          ?? (translateLabel(resolveCountryDisplayName(owner, owner)) || owner);
+      }
+      worker = new Worker(new URL("./vnext/worldMapLabelsWorker.js", import.meta.url), { type: "module" });
+      worker.onmessage = (event) => {
+        if (!alive || !event.data?.labels) return;
+        setPolityLabelCollections({
+          ...EMPTY_POLITY_LABEL_COLLECTIONS,
+          ...event.data.labels,
+          curvedLabelData: EMPTY_FEATURE_COLLECTION,
+          glyphLabelData: EMPTY_FEATURE_COLLECTION,
+        });
+        worker?.terminate();
+        worker = null;
+      };
+      worker.postMessage({ requestId: 1, surfaces, names });
+    })().catch((error) => console.warn("Noms de la carte mondiale :", error));
+    return () => { alive = false; worker?.terminate(); };
+  }, [worldMap.active, worldMap.owners, labelEpoch]);
+
   const sourceObjectsRef = useRef({ boundary: null });
   const updateBoundarySourceFromPatch = useCallback((patch) => {
     if (!patch) return;
@@ -1434,7 +1477,7 @@ const WorldMap = ({ isGlobe = false }) => {
     const result = queued.cartographyResult ?? {};
     if (result.boundaryPatch) updateBoundarySourceFromPatch(result.boundaryPatch);
     if (result.disputedData?.features) setDisputedRegionData(result.disputedData);
-    if (result.labels?.labelData?.features) {
+    if (result.labels?.labelData?.features && !getWorldMapState().active) {
       setPolityLabelCollections({
         ...EMPTY_POLITY_LABEL_COLLECTIONS,
         ...result.labels,
@@ -1853,7 +1896,7 @@ const WorldMap = ({ isGlobe = false }) => {
       } else {
         if (result.boundaryPatch) updateBoundarySourceFromPatch(result.boundaryPatch);
         if (result.disputedData?.features) setDisputedRegionData(result.disputedData);
-        if (result.labels?.labelData?.features) {
+        if (result.labels?.labelData?.features && !getWorldMapState().active) {
           setPolityLabelCollections({
             ...EMPTY_POLITY_LABEL_COLLECTIONS,
             ...result.labels,

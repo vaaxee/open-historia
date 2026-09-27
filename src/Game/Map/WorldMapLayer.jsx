@@ -1,85 +1,117 @@
-// Carte mondiale unique (phase 5, étape B) — la carte des provinces dans le jeu.
+// Carte mondiale unique (phase 5) — la carte des provinces dans le jeu.
 //
 // Tuiles vectorielles servies par le serveur (server/worldMap.js) : la
 // géométrie ne change jamais. Chaque province est coloriée par « feature-state »
 // (la couleur de son propriétaire) ; chaque limite reçoit son genre (province,
 // état, pays) d'après les propriétaires de ses deux provinces
-// (runtime/worldmap/borders.js).
+// (runtime/worldmap/borders.js). Les noms de pays sont placés par Nations.jsx
+// sur la réunion des provinces de chaque pays (worldMapStore.js).
 //
-// Pour l'instant (étape B), seulement en aperçu, coloriée avec les pays
-// d'aujourd'hui : ?worldmap=today dans l'adresse, ou
-// localStorage["oh:worldmap"] = "today". Opaque, elle couvre l'ancienne carte
-// politique ; les noms, villes, bâtiments et unités restent au-dessus.
-// L'étape C la branchera sur les scénarios (province → pays, province → état).
+// Deux aperçus (?worldmap=… dans l'adresse, ou localStorage["oh:worldmap"]) :
+//   today     les pays d'aujourd'hui (Natural Earth)
+//   scenario  le scénario actif converti (provinces.v1.json), avec les
+//             changements de territoire de la partie (par état)
+// Opaque, la carte couvre l'ancienne carte politique ; noms, villes, bâtiments
+// et unités restent au-dessus.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
-import { BORDER_KIND, arcKind, todayColour } from "../../runtime/worldmap/borders.js";
+import { getNationColors } from "../../runtime/assets.js";
+import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import {
+  BORDER_KIND, arcKind, changedProvinces, provinceOwners, todayColour,
+} from "../../runtime/worldmap/borders.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
+import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 
+export { worldMapPreviewMode };
 const SOURCE = "worldmap";
+const NEUTRAL = "#d8cfb8";
 
-export const worldMapPreviewMode = () => {
-  if (typeof window === "undefined") return "";
-  try {
-    const fromUrl = new URLSearchParams(window.location.search).get("worldmap");
-    if (fromUrl) return fromUrl;
-    return window.localStorage?.getItem("oh:worldmap") ?? "";
-  } catch {
-    return "";
-  }
-};
-
-const fetchJson = async (file) => {
-  const response = await fetch(`/api/worldmap/v1/${file}`);
-  if (!response.ok) throw new Error(`${file} : HTTP ${response.status}`);
+const fetchJson = async (url) => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url} : HTTP ${response.status}`);
   return response.json();
 };
 
-// Les propriétaires : pour l'aperçu, le pays d'aujourd'hui de chaque province.
-const loadTodayOwners = async () => {
-  const [provinces, countries, arcs] = await Promise.all([
-    fetchJson("provinces.json"), fetchJson("countries-today.json"), fetchJson("arcs-index.json"),
-  ]);
-  const owner = new Map(); const state = new Map();
-  for (const province of provinces) {
-    owner.set(province.id, province.country ?? "");
-    state.set(province.id, province.state ?? "");
-  }
-  return { provinces, countries, arcs, owner, state };
+// Une couleur stable pour un propriétaire sans couleur dans le scénario.
+const hashedColour = (owner) => {
+  let h = 2166136261;
+  for (const ch of owner) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  const hue = (h >>> 0) % 360;
+  return `hsl(${hue}, 32%, 68%)`;
 };
+
+const selectOverrides = (world) => world?.regionOwnershipOverrides ?? null;
 
 const WorldMapLayer = () => {
   const { current: mapRef } = useMap();
   const map = mapRef?.getMap?.() ?? mapRef;
   const [mode] = useState(worldMapPreviewMode);
   const [data, setData] = useState(null);
+  const overrides = useRuntimeState("world", selectOverrides);
+  const applied = useRef({ owners: null, source: null });
 
   useEffect(() => {
-    if (mode !== "today") return undefined;
+    if (mode !== "today" && mode !== "scenario") return undefined;
     let alive = true;
-    fetch("/api/worldmap/status")
-      .then((response) => response.json())
-      .then((status) => (status?.available ? loadTodayOwners() : null))
-      .then((loaded) => { if (alive) setData(loaded); })
+    (async () => {
+      const status = await fetchJson("/api/worldmap/status");
+      if (!status?.available) return null;
+      const [provinces, arcs] = await Promise.all([fetchJson("/api/worldmap/v1/provinces.json"), fetchJson("/api/worldmap/v1/arcs-index.json")]);
+      const stateOfProvince = provinces.map((p) => p.state ?? "");
+      if (mode === "today") {
+        const countries = await fetchJson("/api/worldmap/v1/countries-today.json");
+        const scenario = { owners: provinces.map((p) => countries[p.country]?.name ?? ""), states: stateOfProvince };
+        const colours = new Map(Object.values(countries).map((c) => [c.name, todayColour(c)]));
+        return { scenario, arcs, colourOf: (owner) => colours.get(owner) ?? NEUTRAL, useOverrides: false };
+      }
+      const scenario = await fetchJson("/api/worldmap/scenario");
+      const palette = await getNationColors().catch(() => ({}));
+      const colourOf = (owner) => {
+        const rgb = palette?.[owner];
+        return Array.isArray(rgb) ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : owner ? hashedColour(owner) : NEUTRAL;
+      };
+      return { scenario, arcs, colourOf, useOverrides: true };
+    })()
+      .then((loaded) => { if (alive && loaded) setData(loaded); })
       .catch((error) => console.warn("Carte mondiale indisponible :", error));
     return () => { alive = false; };
   }, [mode]);
 
-  // Couleurs et genres de limites, par feature-state (appliqués aussi aux
-  // tuiles pas encore chargées).
+  // Le propriétaire de chaque province (le scénario, puis la partie).
+  const owners = useMemo(
+    () => (data ? provinceOwners(data.scenario, data.useOverrides ? overrides ?? {} : {}) : null),
+    [data, overrides],
+  );
+
   useEffect(() => {
-    if (!map || !data) return undefined;
+    if (!owners) return;
+    setWorldMapState({ active: true, mode, owners, ownersKey: `${mode}:${owners.length}:${owners.join("|").length}` });
+  }, [owners, mode]);
+  useEffect(() => () => setWorldMapState({ active: false, owners: null }), []);
+
+  // Couleurs et genres de limites, par feature-state : tout la première fois,
+  // puis seulement ce que touchent les provinces qui ont changé de mains.
+  useEffect(() => {
+    if (!map || !data || !owners) return undefined;
     const apply = () => {
-      if (!map.getSource(SOURCE)) return false;
-      for (const province of data.provinces) {
-        map.setFeatureState({ source: SOURCE, sourceLayer: "provinces", id: province.id }, { color: todayColour(data.countries[province.country]) });
+      const source = map.getSource(SOURCE);
+      if (!source) return false;
+      const previous = applied.current.source === source ? applied.current.owners : null;
+      const changed = previous ? changedProvinces(previous, owners) : owners.map((_, k) => k + 1);
+      if (!changed.length) return true;
+      for (const id of changed) {
+        map.setFeatureState({ source: SOURCE, sourceLayer: "provinces", id }, { color: data.colourOf(owners[id - 1]) });
       }
-      const ownerOf = (id) => data.owner.get(id) ?? "";
-      const stateOf = (id) => data.state.get(id) ?? "";
+      const touched = new Set(changed);
+      const ownerOf = (id) => owners[id - 1] ?? "";
+      const stateOf = (id) => data.scenario.states?.[id - 1] ?? "";
       for (const [id, a, b] of data.arcs) {
+        if (previous && !touched.has(a) && !touched.has(b)) continue;
         map.setFeatureState({ source: SOURCE, sourceLayer: "arcs", id }, { kind: arcKind(a, b, ownerOf, stateOf) });
       }
+      applied.current = { owners, source };
       enforceMapLayerOrder(map);
       return true;
     };
@@ -87,9 +119,9 @@ const WorldMapLayer = () => {
     const retry = () => { if (apply()) map.off("sourcedata", retry); };
     map.on("sourcedata", retry);
     return () => map.off("sourcedata", retry);
-  }, [map, data]);
+  }, [map, data, owners]);
 
-  if (mode !== "today" || !data) return null;
+  if (!data) return null;
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   return (
     <Source id={SOURCE} type="vector" tiles={[`${origin}/api/worldmap/v1/tiles/{z}/{x}/{y}.pbf`]} minzoom={0} maxzoom={8}>
@@ -97,7 +129,7 @@ const WorldMapLayer = () => {
         id="worldmap-fill"
         type="fill"
         source-layer="provinces"
-        paint={{ "fill-color": ["to-color", ["coalesce", ["feature-state", "color"], "#d8cfb8"]], "fill-antialias": false }}
+        paint={{ "fill-color": ["to-color", ["coalesce", ["feature-state", "color"], NEUTRAL]], "fill-antialias": false }}
       />
       <Layer
         id="worldmap-province-lines"

@@ -32,3 +32,25 @@ export const TODAY_PALETTE = Object.freeze([
   "#c9a88b", "#a9bf8f", "#d6c27a", "#9fb3c8", "#c79a9a", "#b7a6c9", "#8fbfb0", "#d9a86c", "#aab27a",
 ]);
 export const todayColour = (country) => TODAY_PALETTE[country?.color ?? 0] ?? TODAY_PALETTE[0];
+
+// Le propriétaire de chaque province dans une partie : celui de son état si la
+// partie l'a changé (regionOwnershipOverrides, par état : les états d'un
+// scénario converti sont ses anciennes régions), sinon celui du scénario.
+// scenario : { owners[], states[] } (provinces.v1.json).
+export const provinceOwners = (scenario, overrides = {}) => {
+  const owners = Array.isArray(scenario?.owners) ? scenario.owners : [];
+  const states = Array.isArray(scenario?.states) ? scenario.states : [];
+  return owners.map((owner, k) => {
+    const state = states[k];
+    if (state && Object.prototype.hasOwnProperty.call(overrides ?? {}, state)) return String(overrides[state] ?? "");
+    return String(owner ?? "");
+  });
+};
+
+// Les provinces dont le propriétaire a changé entre deux répartitions.
+export const changedProvinces = (before, after) => {
+  const out = [];
+  const n = Math.max(before?.length ?? 0, after?.length ?? 0);
+  for (let k = 0; k < n; k += 1) if ((before?.[k] ?? "") !== (after?.[k] ?? "")) out.push(k + 1);
+  return out;
+};
