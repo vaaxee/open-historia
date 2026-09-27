@@ -1391,6 +1391,7 @@ const WorldMap = ({ isGlobe = false }) => {
       for (const owner of new Set(owners.filter(Boolean))) {
         const canonical = toCountryName(owner);
         names[owner] = workerLabelNamesRef.current?.[canonical]
+          ?? getWorldMapState().ownerLabels?.[owner]
           ?? (translateLabel(resolveCountryDisplayName(owner, owner)) || owner);
       }
       worker = new Worker(new URL("./vnext/worldMapLabelsWorker.js", import.meta.url), { type: "module" });

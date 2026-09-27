@@ -232,7 +232,7 @@ export const mergeStrips = ({ land, labels, crossable, islands }) => {
 // Une province de terre ferme de moins de minCells cases (coincée entre les
 // murs de plusieurs années) rejoint une voisine de même histoire : mêmes pays
 // dans histories[0..k] (du plus exigeant au moins exigeant).
-export const mergeTiny = ({ land, labels, islands, histories, minCells = 4 }) => {
+export const mergeTiny = ({ land, labels, islands, histories, minCells = 4, mandatory = 2 }) => {
   const size = new Map(); const first = new Map();
   for (let c = 0; c < N; c += 1) {
     if (!land[c] || !labels[c]) continue;
@@ -264,7 +264,7 @@ export const mergeTiny = ({ land, labels, islands, histories, minCells = 4 }) =>
       const keys = histories.slice(0, level);
       const hit = pairs.find(([c, n]) => keys.every((h) => !h[c] || !h[n] || h[c] === h[n]));
       if (hit) into.set(l, labels[hit[1]]);
-      if (level === 2) break; // jamais moins que 1938 et aujourd'hui
+      if (level === mandatory) break; // jamais moins que les « mandatory » premières
     }
     if (into.get(l) !== null) merged += 1;
   }

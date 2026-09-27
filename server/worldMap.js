@@ -35,6 +35,9 @@ export const worldMapStatus = () => {
     provinces: meta?.landProvinces ?? 0,
     seaIdRange: meta?.seaIdRange ?? null,
     maxzoom: tiles?.maxzoom ?? null,
+    // Change à chaque génération : les adresses des tuiles en dépendent, pour
+    // qu'un navigateur ne garde jamais des tuiles d'une carte précédente.
+    stamp: `${meta?.generatedAt ?? ""}-${tiles?.bytes ?? 0}`.replace(/[^0-9A-Za-z-]/g, ""),
   };
 };
 

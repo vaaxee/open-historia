@@ -37,12 +37,18 @@ export const todayColour = (country) => TODAY_PALETTE[country?.color ?? 0] ?? TO
 // partie l'a changé (regionOwnershipOverrides, par état : les états d'un
 // scénario converti sont ses anciennes régions), sinon celui du scénario.
 // scenario : { owners[], states[] } (provinces.v1.json).
+// Une partie recopie au départ les propriétaires du scénario : seul compte ce
+// qui diffère du propriétaire de l'état au départ (scenario.stateOwners).
 export const provinceOwners = (scenario, overrides = {}) => {
   const owners = Array.isArray(scenario?.owners) ? scenario.owners : [];
   const states = Array.isArray(scenario?.states) ? scenario.states : [];
+  const start = scenario?.stateOwners ?? null;
   return owners.map((owner, k) => {
     const state = states[k];
-    if (state && Object.prototype.hasOwnProperty.call(overrides ?? {}, state)) return String(overrides[state] ?? "");
+    if (state && Object.prototype.hasOwnProperty.call(overrides ?? {}, state)) {
+      const value = String(overrides[state] ?? "");
+      if (!start || !Object.prototype.hasOwnProperty.call(start, state) || start[state] !== value) return value;
+    }
     return String(owner ?? "");
   });
 };

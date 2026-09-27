@@ -32,6 +32,7 @@ import polygonClipping from "polygon-clipping";
 import { readZip } from "./lib/zip.mjs";
 import { shapefileFromZip } from "./lib/shapefile.mjs";
 import { assemble, smoothArc, toLngLat, traceArcs } from "./lib/vectorize.mjs";
+import { GUIDES_1936, GUIDES_1936_ADMIN1 } from "./guides-1936.mjs";
 import { groupArchipelagos, landComponents, mergeStrips, mergeTiny, renumber, respectHistories, unifySmallIslands } from "./lib/refine.mjs";
 import {
   H, N, STEP, W, cached, cellKm2, cellOf, fillRings, latOf, linesOf, lngOf, traceLine,
@@ -49,7 +50,7 @@ if (fromArg > 0 && from < 0) throw new Error(`--from : une de ${STAGES.join(", "
 // Refaire une étape efface son cache et ceux des suivantes.
 if (from >= 0) {
   const doomed = {
-    land: ["land"], elevation: ["elevation"], rivers: ["rivers", "bigriver"], guides: ["walls", "combo", "today", "eff1938", "eff1914", "zones"],
+    land: ["land"], elevation: ["elevation"], rivers: ["rivers", "bigriver"], guides: ["walls", "combo", "today", "eff1938", "eff1914", "eff1936x", "zones"],
     seeds: ["seeds"], grow: ["labels"], shapes: [], attributes: [],
   };
   for (const stage of STAGES.slice(from)) for (const name of doomed[stage]) fs.rmSync(path.join(WORK, `${name}.bin`), { force: true });
@@ -306,7 +307,7 @@ const SPECK_CELLS = 4;
 const PROTRUSION_CELLS = 40;
 const EFFECTIVE_YEARS = ["1938", "1914"]; // gardées pour les contrôles (check-guides.mjs)
 const guides = (() => {
-  const names = ["walls", "combo", "today", ...EFFECTIVE_YEARS.map((y) => `eff${y}`)];
+  const names = ["walls", "combo", "today", "eff1936x", ...EFFECTIVE_YEARS.map((y) => `eff${y}`)];
   if (names.every((name) => fs.existsSync(path.join(WORK, `${name}.bin`)))) {
     return { walls: cached(WORK, "walls", Uint8Array), combo: cached(WORK, "combo", Int32Array), today: cached(WORK, "today", Int32Array) };
   }
@@ -400,10 +401,36 @@ const guides = (() => {
         walls[c] |= bit; kept += 1;
       }
     }
-    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 4096 + eff[c];
+    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 512 + eff[c]; // ≤ 511 pays par année : 4 × 9 + 6 bits, exact en double
     if (!rough) today = eff;
     if (EFFECTIVE_YEARS.includes(name)) saved.push([`eff${name}`, eff]);
     log(`  ${name} : ${count} pays, ${kept} arêtes de mur ajoutées, ${slivers} ${rough ? "bandes de décalage" : "poussières"} rendues (${sliverCells} cases)${schematicFilter ? `, ${schematic} schématiques` : ""}`);
+  }
+  // Compléments 1936 (guides-1936.mjs) : tracés tels quels, un mur tout autour.
+  {
+    const extras = new Int32Array(N);
+    const admin1 = ne("ne_10m_admin_1_states_provinces");
+    const entries = [
+      ...GUIDES_1936.map((g) => [g.name, [[g.polygon]]]),
+      ...GUIDES_1936_ADMIN1.map((g) => {
+        const f = admin1.find((feature) => feature.properties.name === g.admin1);
+        return [g.name, f ? (f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates) : []];
+      }),
+    ];
+    entries.forEach(([, polygons], k) => { for (const polygon of polygons) fillRings(extras, polygon, k + 1); });
+    for (let c = 0; c < N; c += 1) if (!land[c]) extras[c] = 0;
+    let kept = 0;
+    for (let c = 0; c < N; c += 1) {
+      if (!land[c]) continue;
+      const i = c % W;
+      for (const [n, bit] of [[i < W - 1 ? c + 1 : -1, 1], [c + W < N ? c + W : -1, 2]]) {
+        if (n < 0 || !land[n] || extras[n] === extras[c] || (walls[c] & bit)) continue;
+        walls[c] |= bit; kept += 1;
+      }
+    }
+    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 64 + extras[c];
+    saved.push(["eff1936x", extras]);
+    log(`  compléments 1936 : ${entries.map(([n]) => n).join(", ")}, ${kept} arêtes de mur ajoutées`);
   }
   const ids = new Map();
   const combo = new Int32Array(N);
@@ -755,10 +782,11 @@ const labels = cached(WORK, "labels", Int32Array, () => {
   // 1914 et aujourd'hui, sinon en 1938 et aujourd'hui.
   const eff1938 = cached(WORK, "eff1938", Int32Array);
   const eff1914 = cached(WORK, "eff1914", Int32Array);
+  const eff1936x = cached(WORK, "eff1936x", Int32Array);
   const stages = [
     (c, n) => !wallBetween(c, n),
-    (c, n) => eff1938[c] === eff1938[n] && eff1914[c] === eff1914[n] && today[c] === today[n],
-    (c, n) => eff1938[c] === eff1938[n] && today[c] === today[n],
+    (c, n) => eff1936x[c] === eff1936x[n] && eff1938[c] === eff1938[n] && eff1914[c] === eff1914[n] && today[c] === today[n],
+    (c, n) => eff1936x[c] === eff1936x[n] && eff1938[c] === eff1938[n] && today[c] === today[n],
   ];
   for (const allowed of stages) {
     let wave = [];
@@ -783,7 +811,7 @@ const labels = cached(WORK, "labels", Int32Array, () => {
   for (let c = 0; c < N; c += 1) if (label[c]) { carry[c] = label[c]; origin[c] = c; frontier.push(c); }
   // Un pays inconnu (0 : îlot absent des sources) s'accorde avec tout.
   const same = (x, y) => !x || !y || x === y;
-  const sameHistory = (a, b) => same(eff1938[a], eff1938[b]) && same(eff1914[a], eff1914[b]) && same(today[a], today[b]);
+  const sameHistory = (a, b) => eff1936x[a] === eff1936x[b] && same(eff1938[a], eff1938[b]) && same(eff1914[a], eff1914[b]) && same(today[a], today[b]);
   for (let d = 1; d <= REACH && frontier.length; d += 1) {
     const next = [];
     for (const c of frontier) {
@@ -844,9 +872,9 @@ const labels = cached(WORK, "labels", Int32Array, () => {
   log(`  petites îles réunies : ${unifySmallIslands({ land, labels: label, today: combo, islands })} cases`);
   const archipelagos = groupArchipelagos({ land, labels: label, combo, islands });
   log(`  archipels : ${archipelagos.dust} provinces de poussières d'îles, ${archipelagos.merges} regroupements`);
-  log(`  provinces d'une à trois cases fondues : ${mergeTiny({ land, labels: label, islands, histories: [eff1938, today, eff1914] })}`);
+  log(`  provinces d'une à trois cases fondues : ${mergeTiny({ land, labels: label, islands, histories: [eff1936x, eff1938, today, eff1914], mandatory: 3 })}`);
   log(`  lanières fondues dans leur voisine : ${mergeStrips({ land, labels: label, crossable, islands })}`);
-  const histories = respectHistories({ land, labels: label, histories: [eff1938, eff1914] });
+  const histories = respectHistories({ land, labels: label, histories: [eff1936x, eff1938, eff1914] });
   log(`  cases rendues au pays de leur province (1938, 1914) : ${histories.moved}, petites provinces d'histoire unique : ${histories.created}`);
   log(`  ${renumber({ land, labels: label })} provinces numérotées`);
   return label;

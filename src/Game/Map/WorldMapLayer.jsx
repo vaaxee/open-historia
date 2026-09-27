@@ -27,6 +27,15 @@ import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 export { worldMapPreviewMode };
 const SOURCE = "worldmap";
 const NEUTRAL = "#d8cfb8";
+// La mer de la carte mondiale : une nappe opaque sous les provinces, qui
+// recouvre l'ancienne carte politique. Ses côtes, en gros pixels et mal calées,
+// dépassaient sinon en mer (les zones pâles au large de l'Espagne, du Maroc,
+// de la Crimée…).
+const SEA = "#a3a8b0";
+const SEA_SHEET = Object.freeze({
+  type: "FeatureCollection",
+  features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]] } }],
+});
 
 const fetchJson = async (url) => {
   const response = await fetch(url);
@@ -64,15 +73,16 @@ const WorldMapLayer = () => {
         const countries = await fetchJson("/api/worldmap/v1/countries-today.json");
         const scenario = { owners: provinces.map((p) => countries[p.country]?.name ?? ""), states: stateOfProvince };
         const colours = new Map(Object.values(countries).map((c) => [c.name, todayColour(c)]));
-        return { scenario, arcs, colourOf: (owner) => colours.get(owner) ?? NEUTRAL, useOverrides: false };
+        return { scenario, arcs, colourOf: (owner) => colours.get(owner) ?? NEUTRAL, useOverrides: false, stamp: status.stamp };
       }
       const scenario = await fetchJson("/api/worldmap/scenario");
       const palette = await getNationColors().catch(() => ({}));
       const colourOf = (owner) => {
-        const rgb = palette?.[owner];
+        // Les pays du jeu, puis ceux que la correction de 1936 ajoute (Dantzig, Tanger).
+        const rgb = palette?.[owner] ?? scenario.newOwners?.[owner]?.color;
         return Array.isArray(rgb) ? `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})` : owner ? hashedColour(owner) : NEUTRAL;
       };
-      return { scenario, arcs, colourOf, useOverrides: true };
+      return { scenario, arcs, colourOf, useOverrides: true, stamp: status.stamp };
     })()
       .then((loaded) => { if (alive && loaded) setData(loaded); })
       .catch((error) => console.warn("Carte mondiale indisponible :", error));
@@ -87,8 +97,9 @@ const WorldMapLayer = () => {
 
   useEffect(() => {
     if (!owners) return;
-    setWorldMapState({ active: true, mode, owners, ownersKey: `${mode}:${owners.length}:${owners.join("|").length}` });
-  }, [owners, mode]);
+    const ownerLabels = Object.fromEntries(Object.entries(data?.scenario?.newOwners ?? {}).map(([owner, info]) => [owner, info?.label ?? owner]));
+    setWorldMapState({ active: true, mode, owners, ownerLabels, ownersKey: `${mode}:${owners.length}:${owners.join("|").length}` });
+  }, [owners, mode, data]);
   useEffect(() => () => setWorldMapState({ active: false, owners: null }), []);
 
   // Couleurs et genres de limites, par feature-state : tout la première fois,
@@ -124,7 +135,11 @@ const WorldMapLayer = () => {
   if (!data) return null;
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   return (
-    <Source id={SOURCE} type="vector" tiles={[`${origin}/api/worldmap/v1/tiles/{z}/{x}/{y}.pbf`]} minzoom={0} maxzoom={8}>
+    <>
+    <Source id="worldmap-sea-source" type="geojson" data={SEA_SHEET}>
+      <Layer id="worldmap-sea" type="fill" paint={{ "fill-color": SEA, "fill-antialias": false }} />
+    </Source>
+    <Source id={SOURCE} type="vector" tiles={[`${origin}/api/worldmap/v1/tiles/{z}/{x}/{y}.pbf?v=${data.stamp ?? ""}`]} minzoom={0} maxzoom={8}>
       <Layer
         id="worldmap-fill"
         type="fill"
@@ -154,6 +169,7 @@ const WorldMapLayer = () => {
         }}
       />
     </Source>
+    </>
   );
 };
 

@@ -240,7 +240,15 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
 - **Noms de pays** : le serveur réunit les provinces de chaque propriétaire (`POST /api/worldmap/surfaces`, `server/worldMapSurfaces.js`, sur une trame à 0,1°). Le moteur de noms du jeu les place et les courbe sur ces formes, dans un travailleur à part (`vnext/worldMapLabelsWorker.js`).
 - **Aperçu** : `?worldmap=scenario` (ou `localStorage["oh:worldmap"] = "scenario"`) montre le scénario actif converti, avec les changements de la partie. `today` montre les pays d'aujourd'hui.
 - **Lacs** : ceux de plus de 300 km² sont de l'eau (Léman, Constance, Balaton, Garde).
-- **WW2+ 1936** : converti (13 175 provinces, 95 pays, 1 005 états). Attention, ce scénario donne à la Pologne ses frontières d'après 1945 (Poméranie, Silésie, sud de la Prusse-Orientale) : pas de corridor de Dantzig. La conversion le reproduit fidèlement.
+- **Correction à une date** : `node --max-old-space-size=8192 scripts/worldmap/correct-1936.mjs <scénario>`.
+  - Garde la conversion brute dans `provinces.v1.converted.json`, en repart toujours, et écrit `provinces.v1.json` et `corrections-1936.json` (points de contrôle et différences en Europe et en Méditerranée).
+  - En Europe et en Méditerranée, chaque province prend le pays de la carte de 1938, rapporté au pays du scénario.
+  - La correction remet ensuite l'Autriche, la Tchécoslovaquie entière (Sudètes, Teschen, sud de la Slovaquie, Ruthénie), Djibouti, le Maroc espagnol (d'après 1914) et le sud de Sakhaline.
+  - Les compléments 1936 (`scripts/worldmap/guides-1936.mjs`, tracés à la main à quelques km près) donnent Dantzig ville libre, Tanger zone internationale, Ifni, Zara et Lagosta italiennes, et Touva (d'après Natural Earth). Ce sont aussi des lignes guides de la carte : aucune province ne les chevauche.
+  - Une province qui change de pays quitte son ancien état.
+- **Propriétaires de départ** : `stateOwners` donne le propriétaire de chaque état au départ. Une partie qui recopie le scénario ne change donc rien ; seul ce qui en diffère compte.
+- **Mer** : une nappe opaque (`worldmap-sea`) sous les provinces recouvre l'ancienne carte politique, dont les côtes mal calées dépassaient en mer (les zones pâles au large de l'Espagne, du Maroc, de la Crimée…).
+- **WW2+ 1936** : l'ancien scénario donne à la Pologne ses frontières d'après 1945 (Poméranie, Silésie, sud de la Prusse-Orientale) ; la correction à 1936 le répare, sans toucher au scénario d'origine.
 
 ### Sources et licences
 

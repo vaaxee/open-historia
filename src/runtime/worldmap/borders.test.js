@@ -38,3 +38,9 @@ test("propriétaires : le scénario, puis les changements de la partie par état
   assert.deepEqual(owners, ["Germany", "France", "Germany"]);
   assert.deepEqual(changedProvinces(provinceOwners(scenario), owners), [1]);
 });
+
+test("une partie qui recopie le scénario ne change rien ; seul un vrai changement compte", () => {
+  const scenario = { owners: ["Free City of Danzig", "Poland"], states: ["pomerelia~danzig", "pomerelia"], stateOwners: { pomerelia: "Poland", "pomerelia~danzig": "Free City of Danzig" } };
+  assert.deepEqual(provinceOwners(scenario, { pomerelia: "Poland" }), ["Free City of Danzig", "Poland"]);
+  assert.deepEqual(provinceOwners(scenario, { pomerelia: "Germany" }), ["Free City of Danzig", "Germany"]);
+});

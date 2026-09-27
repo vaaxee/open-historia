@@ -242,7 +242,10 @@ regions.forEach((f, k) => {
   if (!stateProvinces.has(id)) doubts.emptyStates.push({ state: id, owner: ownerOf(f, k) });
 });
 
-const scenario = { mapVersion: meta.version, scenario: scenarioId, generatedAt: new Date().toISOString(), owners, states, stateInfo };
+// Le propriétaire de chaque état au départ du scénario : une partie ne compte
+// comme changement que ce qui en diffère (voir runtime/worldmap/borders.js).
+const stateOwners = Object.fromEntries(regions.map((f, k) => [regionId(f, k), ownerOf(f, k)]));
+const scenario = { mapVersion: meta.version, scenario: scenarioId, generatedAt: new Date().toISOString(), owners, states, stateInfo, stateOwners };
 fs.writeFileSync(path.join(scenarioDir, "provinces.v1.json"), JSON.stringify(scenario));
 doubts.mixed.sort((a, b) => a.share - b.share);
 fs.writeFileSync(path.join(scenarioDir, "conversion-v1.json"), JSON.stringify({ scenario: scenarioId, threshold: OWNER_DOUBT_SHARE, doubts }, null, 2));
