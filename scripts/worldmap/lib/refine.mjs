@@ -1,5 +1,5 @@
 // Retouches de la trame des provinces, après la croissance :
-// - une petite île n'est jamais coupée (sauf par une frontière d'aujourd'hui) ;
+// - une petite île n'est jamais coupée (sauf par une frontière d'une année guide) ;
 // - les provinces faites de poussières d'îles sont regroupées par archipel ;
 // - une province trop étroite (lanière le long d'un fleuve ou d'une côte) est
 //   fondue dans sa voisine, sauf si une ligne guide ou un très grand fleuve
@@ -74,7 +74,8 @@ export const unifySmallIslands = ({ land, labels, today, islands }) => {
     if (counts.size < 2) continue;
     keep.set(k, [...counts].sort((a, b) => b[1] - a[1])[0][0]);
   }
-  // Une frontière d'aujourd'hui qui coupe l'île (Saint-Martin, Usedom…) reste.
+  // Une frontière (d'aujourd'hui ou d'une année guide : today reçoit la
+  // combinaison des pays) qui coupe l'île (Saint-Martin, Usedom…) reste.
   const countries = new Map();
   for (let c = 0; c < N; c += 1) {
     const k = islands.comp[c];
@@ -114,17 +115,20 @@ export const groupArchipelagos = ({ land, labels, combo, islands }) => {
   const stats = provinceStats(land, labels);
   const dust = new Map(); // province → { km2, center, box, combo }
   const onlyDust = new Map();
+  const combos = new Map(); // province → combinaison unique, ou -1 si plusieurs
   for (let c = 0; c < N; c += 1) {
     const l = labels[c];
     if (!land[c] || !l) continue;
     const small = islands.km2[islands.comp[c]] <= R.dustIslandKm2;
     onlyDust.set(l, (onlyDust.get(l) ?? true) && small);
+    if (!combos.has(l)) combos.set(l, combo[c]); else if (combos.get(l) !== combo[c]) combos.set(l, -1);
   }
   for (const [l, only] of onlyDust) {
-    if (!only) continue;
+    // Seulement les provinces d'une seule histoire : deux histoires ne se mêlent pas.
+    if (!only || combos.get(l) === -1) continue;
     const s = stats.get(l);
     dust.set(l, {
-      km2: s.km2, center: [s.sx / s.km2, s.sy / s.km2], box: [s.minX, s.minY, s.maxX, s.maxY], combo: combo[s.first], into: l,
+      km2: s.km2, center: [s.sx / s.km2, s.sy / s.km2], box: [s.minX, s.minY, s.maxX, s.maxY], combo: combos.get(l), into: l,
     });
   }
   const root = (l) => { let r = l; while (dust.get(r).into !== r) r = dust.get(r).into; return r; };
@@ -223,6 +227,113 @@ export const mergeStrips = ({ land, labels, crossable, islands }) => {
     total += into.size;
   }
   return total;
+};
+
+// Une province de terre ferme de moins de minCells cases (coincée entre les
+// murs de plusieurs années) rejoint une voisine de même histoire : mêmes pays
+// dans histories[0..k] (du plus exigeant au moins exigeant).
+export const mergeTiny = ({ land, labels, islands, histories, minCells = 4 }) => {
+  const size = new Map(); const first = new Map();
+  for (let c = 0; c < N; c += 1) {
+    if (!land[c] || !labels[c]) continue;
+    size.set(labels[c], (size.get(labels[c]) ?? 0) + 1);
+    if (!first.has(labels[c])) first.set(labels[c], c);
+  }
+  const into = new Map();
+  for (const [l, count] of size) {
+    if (count >= minCells) continue;
+    const c0 = first.get(l);
+    if (islands.km2[islands.comp[c0]] <= R.smallIslandKm2) continue;
+    into.set(l, null);
+  }
+  if (!into.size) return 0;
+  // Les voisines de chaque petite province, avec la case de contact.
+  const contacts = new Map();
+  for (let c = 0; c < N; c += 1) {
+    const l = labels[c];
+    if (!land[c] || !into.has(l)) continue;
+    for (const n of n4(c)) {
+      if (n < 0 || !land[n] || labels[n] === l || into.has(labels[n])) continue;
+      if (!contacts.has(l)) contacts.set(l, []);
+      contacts.get(l).push([c, n]);
+    }
+  }
+  let merged = 0;
+  for (const [l, pairs] of contacts) {
+    for (let level = histories.length; level >= 1 && into.get(l) === null; level -= 1) {
+      const keys = histories.slice(0, level);
+      const hit = pairs.find(([c, n]) => keys.every((h) => !h[c] || !h[n] || h[c] === h[n]));
+      if (hit) into.set(l, labels[hit[1]]);
+      if (level === 2) break; // jamais moins que 1938 et aujourd'hui
+    }
+    if (into.get(l) !== null) merged += 1;
+  }
+  for (let c = 0; c < N; c += 1) {
+    const target = into.get(labels[c]);
+    if (land[c] && target) labels[c] = target;
+  }
+  return merged;
+};
+
+// Dernière passe : une case dont le pays (pour l'une des années de histories)
+// n'est pas celui de sa province rejoint une voisine dont la province a ce pays.
+// Le pays inconnu (0) s'accorde avec tout.
+export const respectHistories = ({ land, labels, histories, passes = 3 }) => {
+  let moved = 0;
+  for (let pass = 0; pass < passes; pass += 1) {
+    const majority = histories.map((h) => {
+      const counts = new Map();
+      for (let c = 0; c < N; c += 1) {
+        if (!land[c] || !labels[c] || !h[c]) continue;
+        const k = labels[c] * 65536 + h[c];
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      const best = new Map();
+      for (const [k, v] of counts) {
+        const l = Math.floor(k / 65536);
+        if (!best.has(l) || v > best.get(l)[1]) best.set(l, [k % 65536, v]);
+      }
+      return new Map([...best].map(([l, [value]]) => [l, value]));
+    });
+    const fits = (c, l) => histories.every((h, k) => !h[c] || !majority[k].has(l) || majority[k].get(l) === h[c]);
+    let changed = 0;
+    for (let c = 0; c < N; c += 1) {
+      if (!land[c] || !labels[c] || fits(c, labels[c])) continue;
+      const target = n4(c).find((n) => n >= 0 && land[n] && labels[n] && labels[n] !== labels[c] && fits(c, labels[n]));
+      if (target !== undefined) { labels[c] = labels[target]; changed += 1; }
+    }
+    moved += changed;
+    if (!changed) break;
+  }
+  // Ce qui ne va nulle part (une île du Danube roumaine en 1914 et bulgare en
+  // 1938…) devient sa propre province.
+  const majority = histories.map((h) => {
+    const counts = new Map();
+    for (let c = 0; c < N; c += 1) if (land[c] && labels[c] && h[c]) counts.set(labels[c] * 65536 + h[c], (counts.get(labels[c] * 65536 + h[c]) ?? 0) + 1);
+    const best = new Map();
+    for (const [k, v] of counts) { const l = Math.floor(k / 65536); if (!best.has(l) || v > best.get(l)[1]) best.set(l, [k % 65536, v]); }
+    return best;
+  });
+  const misfit = (c) => histories.some((h, k) => h[c] && majority[k].get(labels[c])?.[0] !== h[c]);
+  let next = 0; for (let c = 0; c < N; c += 1) next = Math.max(next, labels[c]);
+  const done = new Uint8Array(N);
+  let created = 0;
+  for (let start = 0; start < N; start += 1) {
+    if (!land[start] || !labels[start] || done[start] || !misfit(start)) continue;
+    next += 1; created += 1;
+    const from = labels[start];
+    const stack = [start]; done[start] = 1;
+    while (stack.length) {
+      const c = stack.pop();
+      labels[c] = next;
+      for (const n of n4(c)) {
+        if (n < 0 || done[n] || !land[n] || labels[n] !== from || !misfit(n)) continue;
+        if (!histories.every((h) => h[n] === h[start])) continue;
+        done[n] = 1; stack.push(n);
+      }
+    }
+  }
+  return { moved, created };
 };
 
 // Numéros définitifs, 1…n, dans l'ordre de Hilbert de leur centre.

@@ -153,6 +153,9 @@ const roughen = (points, closed, { amplitude, wavelength, spacing }) => {
 
 export const smoothArc = (arc, { tolerance = 0.6, passes = 2, rough = { amplitude: 0.45, wavelength: 1.6, spacing: 0.35 } } = {}) => {
   let points = arc.points;
+  // Un arc court (petite province) : simplification à sa mesure, pour qu'il ne
+  // s'effondre pas.
+  tolerance = Math.min(tolerance, (points.length - 1) / 8);
   if (arc.closed) {
     // Une boucle : on la coupe en deux pour simplifier sans perdre sa forme.
     const half = Math.floor(points.length / 2);

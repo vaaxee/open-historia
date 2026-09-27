@@ -1,41 +1,43 @@
 #!/usr/bin/env node
-// Contrôle : part des provinces qui mêlent deux pays d'une année guide
-// (trame non ondulée), dans une fenêtre. node scripts/worldmap/check-guides.mjs <ouest> <sud> <est> <nord>
+// Contrôle : les provinces qui mêlent deux pays d'une année guide.
+//
+//   node scripts/worldmap/check-guides.mjs <année> [<ouest> <sud> <est> <nord>]
+//
+// On compare à la frontière réellement tracée pour cette année (ondulée, sans
+// les bandes de décalage : work/eff<année>.bin). Une province « mêle » deux pays
+// si moins de 100 % de sa surface est dans l'un ; on donne aussi le seuil de
+// 85 % et les pays en cause.
+
 import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "../../server/dataDir.js";
-import { N, W, colOf, rowOf, fillRings } from "./lib/grid.mjs";
-import { readZip } from "./lib/zip.mjs";
-import { shapefileFromZip } from "./lib/shapefile.mjs";
+import { W, H, colOf, rowOf } from "./lib/grid.mjs";
 
-const WM = path.join(DATA_DIR, "worldmap");
-const load = (n, T) => { const b = fs.readFileSync(path.join(WM, "work", `${n}.bin`)); return new T(b.buffer, b.byteOffset, b.byteLength / T.BYTES_PER_ELEMENT); };
+const WORK = path.join(DATA_DIR, "worldmap", "work");
+const load = (n, T) => { const b = fs.readFileSync(path.join(WORK, `${n}.bin`)); return new T(b.buffer, b.byteOffset, b.byteLength / T.BYTES_PER_ELEMENT); };
+const year = process.argv[2];
+const [west, south, east, north] = process.argv.length >= 7 ? process.argv.slice(3, 7).map(Number) : [-180, -58, 180, 84];
 const labels = load("labels", Int32Array);
-const [west, south, east, north] = process.argv.slice(2, 6).map(Number);
-const years = [
-  ["1938", JSON.parse(fs.readFileSync(path.join(WM, "sources", "world_1938.geojson"))).features, (p) => p.NAME],
-  ["1914", JSON.parse(fs.readFileSync(path.join(WM, "sources", "world_1914.geojson"))).features, (p) => p.NAME],
-  ["aujourd'hui", shapefileFromZip(readZip(path.join(WM, "sources", "ne_10m_admin_0_countries.zip"))), (p) => p.ADM0_A3],
-];
-for (const [year, features, keyOf] of years) {
-  const ids = new Map(); const raster = new Int32Array(N);
-  for (const f of features) {
-    const k = keyOf(f.properties ?? {}); if (!k || !f.geometry) continue;
-    if (!ids.has(k)) ids.set(k, ids.size + 1);
-    for (const polygon of f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates) fillRings(raster, polygon, ids.get(k));
-  }
-  const counts = new Map();
-  for (let j = rowOf(north); j < rowOf(south); j += 1) for (let i = colOf(west); i < colOf(east); i += 1) {
-    const c = j * W + i; if (!labels[c] || !raster[c]) continue;
+const land = load("land", Uint8Array);
+const eff = load(`eff${year}`, Int32Array);
+
+const counts = new Map();
+for (let j = Math.max(0, rowOf(north)); j < Math.min(H, rowOf(south)); j += 1) {
+  for (let i = Math.max(0, colOf(west)); i < Math.min(W, colOf(east)); i += 1) {
+    const c = j * W + i;
+    if (!land[c] || !labels[c] || !eff[c]) continue; // 0 : pays inconnu (îlot hors des sources)
     if (!counts.has(labels[c])) counts.set(labels[c], new Map());
-    const m = counts.get(labels[c]); m.set(raster[c], (m.get(raster[c]) ?? 0) + 1);
+    const m = counts.get(labels[c]);
+    m.set(eff[c], (m.get(eff[c]) ?? 0) + 1);
   }
-  let mixed = 0; const names = [...ids.keys()]; const where = [];
-  for (const [l, m] of counts) {
-    const total = [...m.values()].reduce((s, v) => s + v, 0);
-    if (Math.max(...m.values()) / total < 0.85) { mixed += 1; where.push([...m].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => names[k - 1]).join("/")); }
-  }
-  const tally = new Map(); for (const w of where) tally.set(w, (tally.get(w) ?? 0) + 1);
-  if (process.argv.includes("--detail")) console.log([...tally].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, v]) => `${k} ×${v}`).join(", "));
-  console.log(`${year} : ${mixed} provinces sur ${counts.size} mêlent deux pays (moins de 85 % dans l'un)`);
 }
+let strict = 0; let loose = 0; const worst = [];
+for (const [l, m] of counts) {
+  const total = [...m.values()].reduce((s, v) => s + v, 0);
+  const top = Math.max(...m.values());
+  if (top < total) { strict += 1; worst.push([l, total - top, total]); }
+  if (top / total < 0.85) loose += 1;
+}
+worst.sort((a, b) => b[1] - a[1]);
+console.log(`${year} : ${counts.size} provinces ; ${strict} ont au moins une case d'un autre pays, ${loose} en ont plus de 15 %`);
+if (worst.length) console.log(`  les pires (province : cases hors pays / cases) : ${worst.slice(0, 8).map(([l, o, t]) => `${l} : ${o}/${t}`).join(", ")}`);

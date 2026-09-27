@@ -31,7 +31,7 @@ import polygonClipping from "polygon-clipping";
 import { readZip } from "./lib/zip.mjs";
 import { shapefileFromZip } from "./lib/shapefile.mjs";
 import { assemble, smoothArc, toLngLat, traceArcs } from "./lib/vectorize.mjs";
-import { groupArchipelagos, landComponents, mergeStrips, renumber, unifySmallIslands } from "./lib/refine.mjs";
+import { groupArchipelagos, landComponents, mergeStrips, mergeTiny, renumber, respectHistories, unifySmallIslands } from "./lib/refine.mjs";
 import {
   H, N, STEP, W, cached, cellKm2, cellOf, fillRings, latOf, linesOf, lngOf, traceLine,
 } from "./lib/grid.mjs";
@@ -48,7 +48,7 @@ if (fromArg > 0 && from < 0) throw new Error(`--from : une de ${STAGES.join(", "
 // Refaire une étape efface son cache et ceux des suivantes.
 if (from >= 0) {
   const doomed = {
-    land: ["land"], elevation: ["elevation"], rivers: ["rivers", "bigriver"], guides: ["walls", "combo", "today", "zones"],
+    land: ["land"], elevation: ["elevation"], rivers: ["rivers", "bigriver"], guides: ["walls", "combo", "today", "eff1938", "eff1914", "zones"],
     seeds: ["seeds"], grow: ["labels"], shapes: [], attributes: [],
   };
   for (const stage of STAGES.slice(from)) for (const name of doomed[stage]) fs.rmSync(path.join(WORK, `${name}.bin`), { force: true });
@@ -172,21 +172,21 @@ const bigRiver = cached(WORK, "bigriver", Uint8Array, () => {
 
 // ---------------------------------------------------------------------------
 // guides : des « murs » entre cases. Les frontières d'aujourd'hui en sont
-// toujours ; une frontière historique (1938, puis 1914, puis 1200) n'en devient
-// une que là où elle passe à plus de GUIDE_DEDUP_CELLS d'un mur déjà gardé (sinon elle
-// double une frontière connue : les arcs parallèles disparaissent).
+// toujours ; puis celles de 1938, 1914 et 1200, sans les bandes étroites nées
+// du décalage entre sources (voir SLIVER_DEPTH), et pour 1200 sans ses traits
+// schématiques.
 // walls : bit 1 = mur avec la case à l'est, bit 2 = avec la case au sud.
 // zones : parties de terre que murs et très grands fleuves séparent.
 // combo : la combinaison des quatre pays de la case (pour les îles).
 // ---------------------------------------------------------------------------
 export const GUIDE_YEARS = [
-  // [année, lecture, clé du pays, tracé approximatif (on l'ondule)] — les plus sûres d'abord
-  ["aujourd'hui", () => ne("ne_10m_admin_0_countries"), (p) => p.ADM0_A3, false],
-  ["1938", () => readGeojson("world_1938.geojson"), (p) => p.NAME, true],
-  ["1914", () => readGeojson("world_1914.geojson"), (p) => p.NAME, true],
-  ["1200", () => readGeojson("world_1200.geojson"), (p) => p.NAME, true],
+  // [année, lecture, clé du pays, tracé approximatif (on l'ondule), traits schématiques écartés]
+  // — les plus sûres d'abord
+  ["aujourd'hui", () => ne("ne_10m_admin_0_countries"), (p) => p.ADM0_A3, false, false],
+  ["1938", () => readGeojson("world_1938.geojson"), (p) => p.NAME, true, false],
+  ["1914", () => readGeojson("world_1914.geojson"), (p) => p.NAME, true, false],
+  ["1200", () => readGeojson("world_1200.geojson"), (p) => p.NAME, true, true],
 ];
-const GUIDE_DEDUP_CELLS = 6; // ≈ 30 km
 // Les frontières historiques sont tracées à grands traits droits : on les fait
 // onduler de WARP_CELLS cases (≈ 25 km), à deux échelles (≈ 60 et ≈ 22 km).
 const WARP_CELLS = 5;
@@ -228,7 +228,17 @@ const spreadOverLand = (values) => {
 // Un tracé historique dessiné d'un seul trait sur plus de CRUDE_SEGMENT_DEG est
 // schématique (l'est de l'Europe en 1200, par exemple) : on ne s'en sert pas.
 const CRUDE_SEGMENT_DEG = 1.1;
-const guideRaster = ([, load, keyOf, rough]) => {
+// Les petites îles (≤ 3 000 km²) ne sont pas ondulées : leur pays est sûr.
+let smallIslandMask = null;
+const smallIslands = () => {
+  if (smallIslandMask) return smallIslandMask;
+  const { comp, km2 } = landComponents(land);
+  smallIslandMask = new Uint8Array(N);
+  for (let c = 0; c < N; c += 1) if (land[c] && km2[comp[c]] <= 3000) smallIslandMask[c] = 1;
+  return smallIslandMask;
+};
+const guideRaster = ([, load, keyOf, rough, schematicFilter]) => {
+  const smallIsland = smallIslands();
   const ids = new Map();
   let values = new Int32Array(N);
   const crude = new Uint8Array(N);
@@ -239,7 +249,7 @@ const guideRaster = ([, load, keyOf, rough]) => {
     const polygons = feature.geometry?.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry?.type === "MultiPolygon" ? feature.geometry.coordinates : [];
     for (const polygon of polygons) {
       fillRings(values, polygon, ids.get(key));
-      if (!rough) continue;
+      if (!schematicFilter) continue;
       for (const ring of polygon) {
         for (let k = 0; k < ring.length - 1; k += 1) {
           const [x0, y0] = ring[k]; const [x1, y1] = ring[k + 1];
@@ -249,7 +259,7 @@ const guideRaster = ([, load, keyOf, rough]) => {
     }
   }
   // Autour des traits schématiques, de quoi couvrir l'ondulation.
-  if (rough) {
+  if (schematicFilter) {
     let frontier = [];
     for (let c = 0; c < N; c += 1) if (crude[c]) frontier.push(c);
     for (let d = 1; d <= WARP_CELLS + 2 && frontier.length; d += 1) {
@@ -266,7 +276,9 @@ const guideRaster = ([, load, keyOf, rough]) => {
         const di = Math.round(WARP_CELLS * (warpNoise(x, y, 1) * 0.55 + warpNoise(x * 2.7, y * 2.7, 2) * 0.45));
         const dj = Math.round(WARP_CELLS * (warpNoise(x, y, 3) * 0.55 + warpNoise(x * 2.7, y * 2.7, 4) * 0.45));
         const si = Math.min(W - 1, Math.max(0, i + di)); const sj = Math.min(H - 1, Math.max(0, j + dj));
-        warped[j * W + i] = values[sj * W + si];
+        // Une case de terre qui pioche en mer, ou d'une petite île, garde son pays non ondulé.
+        const c = j * W + i;
+        warped[c] = smallIsland[c] ? values[c] : values[sj * W + si] || values[c];
       }
     }
     values = warped;
@@ -277,43 +289,120 @@ const guideRaster = ([, load, keyOf, rough]) => {
 };
 
 log("Lignes guides…");
+// Un morceau (terre d'un même pays pour l'année, entre les murs déjà tracés)
+// dont aucun point n'est à plus de SLIVER_DEPTH cases de son bord, et collé à un
+// mur existant sur au moins SLIVER_WALL_SHARE de son bord, est une bande née du
+// décalage entre sources : il est rendu à son voisin. Tout autre morceau est
+// gardé, avec sa frontière entière jusqu'aux murs qu'elle rejoint (pas de trou).
+const SLIVER_DEPTH = 3; // ≈ 15 km : bandes de moins de ≈ 30 km de large
+const SLIVER_WALL_SHARE = 0.25;
+// Et un morceau de moins de SPECK_CELLS cases (poussière née de l'ondulation)
+// est toujours rendu à son voisin.
+const SPECK_CELLS = 4;
+// Et un morceau de pays A qui déborde d'un mur derrière lequel A se trouve
+// (l'Andorre de 1938 qui dépasse de celle d'aujourd'hui) est rendu s'il est
+// fin ou plus petit que PROTRUSION_CELLS cases (≈ 1 000 km²).
+const PROTRUSION_CELLS = 40;
+const EFFECTIVE_YEARS = ["1938", "1914"]; // gardées pour les contrôles (check-guides.mjs)
 const guides = (() => {
-  const wallsFile = path.join(WORK, "walls.bin");
-  if (fs.existsSync(wallsFile) && fs.existsSync(path.join(WORK, "combo.bin")) && fs.existsSync(path.join(WORK, "today.bin"))) {
+  const names = ["walls", "combo", "today", ...EFFECTIVE_YEARS.map((y) => `eff${y}`)];
+  if (names.every((name) => fs.existsSync(path.join(WORK, `${name}.bin`)))) {
     return { walls: cached(WORK, "walls", Uint8Array), combo: cached(WORK, "combo", Int32Array), today: cached(WORK, "today", Int32Array) };
   }
   const walls = new Uint8Array(N);
-  const near = new Uint8Array(N).fill(255); // distance au mur gardé le plus proche
-  const comboKey = new Float64Array(N);
-  let today = null;
-  const addWall = (c, bit) => { walls[c] |= bit; };
-  const refreshNear = (sources) => {
-    let frontier = sources;
-    for (const c of frontier) near[c] = 0;
-    for (let d = 1; d <= GUIDE_DEDUP_CELLS && frontier.length; d += 1) {
-      const next = [];
-      for (const c of frontier) for (const n of n4(c)) if (n >= 0 && near[n] > d) { near[n] = d; next.push(n); }
-      frontier = next;
-    }
+  const wallNow = (a, b) => {
+    const lo = Math.min(a, b); const hi = Math.max(a, b);
+    return (walls[lo] & (hi - lo === 1 ? 1 : 2)) !== 0;
   };
+  const comboKey = new Float64Array(N);
+  const stack = new Int32Array(N);
+  let today = null;
+  const saved = [];
   for (const year of GUIDE_YEARS) {
+    const [name, , , rough, schematicFilter] = year;
     const { values, count, crude } = guideRaster(year);
-    const sources = [];
-    let kept = 0; let dropped = 0; let schematic = 0;
+    let eff = values;
+    let slivers = 0; let sliverCells = 0;
+    // Aujourd'hui : seules les poussières (méandres de fleuves frontières) sont rendues.
+    {
+      // Morceaux : composantes 4-connexes de même pays, sans franchir un mur.
+      const piece = new Int32Array(N);
+      let pieces = 0;
+      for (let start = 0; start < N; start += 1) {
+        if (!land[start] || piece[start]) continue;
+        pieces += 1;
+        let top = 0; stack[top++] = start; piece[start] = pieces;
+        while (top) {
+          const c = stack[--top];
+          for (const n of n4(c)) {
+            if (n < 0 || !land[n] || piece[n] || values[n] !== values[c] || wallNow(c, n)) continue;
+            piece[n] = pieces; stack[top++] = n;
+          }
+        }
+      }
+      // Profondeur (distance au bord du morceau) et part de bord le long d'un mur.
+      const depth = new Uint8Array(N);
+      const boundary = new Int32Array(pieces + 1); const alongWall = new Int32Array(pieces + 1); const protrudes = new Int32Array(pieces + 1);
+      let frontier = [];
+      for (let c = 0; c < N; c += 1) {
+        if (!land[c]) continue;
+        let edge = false;
+        for (const n of n4(c)) {
+          if (n < 0 || !land[n] || piece[n] === piece[c]) continue;
+          edge = true; boundary[piece[c]] += 1;
+          if (wallNow(c, n)) { alongWall[piece[c]] += 1; if (values[n] === values[c]) protrudes[piece[c]] += 1; }
+        }
+        if (edge) { depth[c] = 1; frontier.push(c); }
+      }
+      for (let d = 2; d <= SLIVER_DEPTH + 1 && frontier.length; d += 1) {
+        const next = [];
+        for (const c of frontier) {
+          for (const n of n4(c)) {
+            if (n < 0 || !land[n] || depth[n] || piece[n] !== piece[c]) continue;
+            depth[n] = d; next.push(n);
+          }
+        }
+        frontier = next;
+      }
+      const deep = new Uint8Array(pieces + 1);
+      const size = new Int32Array(pieces + 1);
+      for (let c = 0; c < N; c += 1) if (land[c]) size[piece[c]] += 1;
+      for (let c = 0; c < N; c += 1) if (land[c] && (depth[c] === 0 || depth[c] > SLIVER_DEPTH)) deep[piece[c]] = 1;
+      const sliver = (p) => boundary[p] > 0 && (size[p] < SPECK_CELLS || (rough && (
+        (!deep[p] && alongWall[p] >= SLIVER_WALL_SHARE * boundary[p])
+        || (protrudes[p] > 0 && (!deep[p] || size[p] < PROTRUSION_CELLS)))));
+      eff = values.slice();
+      for (let p = 1; p <= pieces; p += 1) if (sliver(p)) slivers += 1;
+      for (let c = 0; c < N; c += 1) if (land[c] && sliver(piece[c])) { eff[c] = 0; sliverCells += 1; }
+      // Les cases des bandes prennent le pays du morceau voisin (sans franchir un mur).
+      frontier = [];
+      for (let c = 0; c < N; c += 1) if (land[c] && eff[c]) frontier.push(c);
+      while (frontier.length) {
+        const next = [];
+        for (const c of frontier) {
+          for (const n of n4(c)) {
+            if (n < 0 || !land[n] || eff[n] || wallNow(c, n)) continue;
+            eff[n] = eff[c]; next.push(n);
+          }
+        }
+        frontier = next;
+      }
+      for (let c = 0; c < N; c += 1) if (land[c] && !eff[c]) eff[c] = values[c];
+    }
+    let kept = 0; let schematic = 0;
     for (let c = 0; c < N; c += 1) {
       if (!land[c]) continue;
       const i = c % W;
       for (const [n, bit] of [[i < W - 1 ? c + 1 : -1, 1], [c + W < N ? c + W : -1, 2]]) {
-        if (n < 0 || !land[n] || values[n] === values[c]) continue;
-        if (year[3] && (near[c] <= GUIDE_DEDUP_CELLS || near[n] <= GUIDE_DEDUP_CELLS)) { dropped += 1; continue; }
-        if (year[3] && (crude[c] || crude[n])) { schematic += 1; continue; }
-        addWall(c, bit); sources.push(c, n); kept += 1;
+        if (n < 0 || !land[n] || eff[n] === eff[c] || (walls[c] & bit)) continue;
+        if (schematicFilter && (crude[c] || crude[n])) { schematic += 1; continue; }
+        walls[c] |= bit; kept += 1;
       }
     }
-    refreshNear(sources);
-    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 4096 + values[c];
-    if (!year[3]) today = values;
-    log(`  ${year[0]} : ${count} pays, ${kept} arêtes de mur gardées, ${dropped} qui doublaient une frontière déjà tracée, ${schematic} schématiques`);
+    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 4096 + eff[c];
+    if (!rough) today = eff;
+    if (EFFECTIVE_YEARS.includes(name)) saved.push([`eff${name}`, eff]);
+    log(`  ${name} : ${count} pays, ${kept} arêtes de mur ajoutées, ${slivers} ${rough ? "bandes de décalage" : "poussières"} rendues (${sliverCells} cases)${schematicFilter ? `, ${schematic} schématiques` : ""}`);
   }
   const ids = new Map();
   const combo = new Int32Array(N);
@@ -323,7 +412,7 @@ const guides = (() => {
     combo[c] = ids.get(comboKey[c]);
   }
   fs.mkdirSync(WORK, { recursive: true });
-  for (const [name, array] of [["walls", walls], ["combo", combo], ["today", today]]) {
+  for (const [name, array] of [["walls", walls], ["combo", combo], ["today", today], ...saved]) {
     fs.writeFileSync(path.join(WORK, `${name}.bin`), Buffer.from(array.buffer, array.byteOffset, array.byteLength));
   }
   return { walls, combo, today };
@@ -373,7 +462,7 @@ log(`  ${zoneCount} zones (entre murs et très grands fleuves)`);
 // seeds : ≈ 13 000 graines, plus serrées là où il y a du monde.
 // ---------------------------------------------------------------------------
 export const SEED_TUNING = {
-  target: 12350, // + graines des zones sans graine et îlots lointains, − fusions ≈ 13 000 provinces
+  target: 11800, // + graines des zones sans graine et îlots lointains, − fusions ≈ 13 100 provinces
   coarse: 5, // cases de travail par case grossière (0,25°)
   base: 0.12, // poids d'une terre vide
   densityRef: 15, // hab./km² (des villes) pour un poids de 1 en plus
@@ -381,7 +470,7 @@ export const SEED_TUNING = {
   densityCap: 5,
   smoothRadius: 4, // cases grossières
   fixedCityPopulation: 300000, // ces villes gardent leur graine en place
-  minZoneCells: 12, // une zone plus petite n'a pas sa propre province
+  minZoneCells: 4, // une zone plus petite n'a pas sa propre province (Zara en a une)
   lloydPasses: 2,
 };
 const T = SEED_TUNING;
@@ -657,19 +746,51 @@ const labels = cached(WORK, "labels", Int32Array, () => {
     }
     cells = next;
   }
-  // Les cases sans province (lits des très grands fleuves, îlots, poches) :
-  // la province la plus proche à moins de 100 km, par terre ou par mer.
+  // Les cases sans province (lits des très grands fleuves, poches) : d'abord
+  // de proche en proche sur terre, sans franchir un mur ; puis (îlots) la
+  // province la plus proche à moins de 100 km, par terre ou par mer.
+  // Les poches que les murs de plusieurs années découpent (moins de 4 cases,
+  // sans graine) prennent une voisine de même histoire : même pays en 1938,
+  // 1914 et aujourd'hui, sinon en 1938 et aujourd'hui.
+  const eff1938 = cached(WORK, "eff1938", Int32Array);
+  const eff1914 = cached(WORK, "eff1914", Int32Array);
+  const stages = [
+    (c, n) => !wallBetween(c, n),
+    (c, n) => eff1938[c] === eff1938[n] && eff1914[c] === eff1914[n] && today[c] === today[n],
+    (c, n) => eff1938[c] === eff1938[n] && today[c] === today[n],
+  ];
+  for (const allowed of stages) {
+    let wave = [];
+    for (let c = 0; c < N; c += 1) if (label[c]) wave.push(c);
+    while (wave.length) {
+      const next = [];
+      for (const c of wave) {
+        for (const n of n4(c)) {
+          if (n < 0 || !land[n] || label[n] || !allowed(c, n)) continue;
+          label[n] = label[c]; next.push(n);
+        }
+      }
+      wave = next;
+    }
+  }
+  // Par la mer, un îlot ne rejoint qu'une province de même histoire (même pays
+  // en 1938, en 1914 et aujourd'hui) ; sinon il fera sa propre province.
   const REACH = 20;
   const carry = new Int32Array(N);
+  const origin = new Int32Array(N).fill(-1);
   let frontier = [];
-  for (let c = 0; c < N; c += 1) if (label[c]) { carry[c] = label[c]; frontier.push(c); }
+  for (let c = 0; c < N; c += 1) if (label[c]) { carry[c] = label[c]; origin[c] = c; frontier.push(c); }
+  // Un pays inconnu (0 : îlot absent des sources) s'accorde avec tout.
+  const same = (x, y) => !x || !y || x === y;
+  const sameHistory = (a, b) => same(eff1938[a], eff1938[b]) && same(eff1914[a], eff1914[b]) && same(today[a], today[b]);
   for (let d = 1; d <= REACH && frontier.length; d += 1) {
     const next = [];
     for (const c of frontier) {
       for (const n of n4(c)) {
         if (n < 0 || carry[n]) continue;
-        carry[n] = carry[c];
-        if (land[n]) label[n] = carry[c];
+        if (land[n] && !label[n] && !sameHistory(n, origin[c])) continue;
+        carry[n] = carry[c]; origin[n] = origin[c];
+        if (land[n] && !label[n]) label[n] = carry[c];
         next.push(n);
       }
     }
@@ -681,6 +802,7 @@ const labels = cached(WORK, "labels", Int32Array, () => {
     nextLabel += 1; extra += 1;
     label[start] = nextLabel;
     const seen = new Set([start]);
+    const first = start;
     let wave = [start];
     for (let d = 1; d <= REACH && wave.length; d += 1) {
       const next = [];
@@ -688,7 +810,7 @@ const labels = cached(WORK, "labels", Int32Array, () => {
         for (const n of n4(c)) {
           if (n < 0 || seen.has(n)) continue;
           seen.add(n);
-          if (land[n] && !label[n]) label[n] = nextLabel;
+          if (land[n] && !label[n] && sameHistory(n, first)) label[n] = nextLabel;
           next.push(n);
         }
       }
@@ -718,10 +840,13 @@ const labels = cached(WORK, "labels", Int32Array, () => {
   }
   // Retouches : îles, archipels, lanières, numéros.
   const islands = landComponents(land);
-  log(`  petites îles réunies : ${unifySmallIslands({ land, labels: label, today, islands })} cases`);
+  log(`  petites îles réunies : ${unifySmallIslands({ land, labels: label, today: combo, islands })} cases`);
   const archipelagos = groupArchipelagos({ land, labels: label, combo, islands });
   log(`  archipels : ${archipelagos.dust} provinces de poussières d'îles, ${archipelagos.merges} regroupements`);
+  log(`  provinces d'une à trois cases fondues : ${mergeTiny({ land, labels: label, islands, histories: [eff1938, today, eff1914] })}`);
   log(`  lanières fondues dans leur voisine : ${mergeStrips({ land, labels: label, crossable, islands })}`);
+  const histories = respectHistories({ land, labels: label, histories: [eff1938, eff1914] });
+  log(`  cases rendues au pays de leur province (1938, 1914) : ${histories.moved}, petites provinces d'histoire unique : ${histories.created}`);
   log(`  ${renumber({ land, labels: label })} provinces numérotées`);
   return label;
 });
@@ -1061,7 +1186,7 @@ log("Attributs…");
     states: Object.keys(states).length,
     terrains,
     grid: { step: STEP, latTop: 84, latBottom: -58 },
-    tuning: { seeds: SEED_TUNING, grow: GROW_TUNING, borderRivers: BORDER_RIVERS, guideDedupCells: GUIDE_DEDUP_CELLS },
+    tuning: { seeds: SEED_TUNING, grow: GROW_TUNING, borderRivers: BORDER_RIVERS, sliverDepth: SLIVER_DEPTH, sliverWallShare: SLIVER_WALL_SHARE },
     sources: [
       { name: "Natural Earth 10 m (terres, îles, lacs, fleuves, pays, admin-1)", licence: "domaine public", url: "https://www.naturalearthdata.com/" },
       { name: "GeoNames cities15000", licence: "CC BY 4.0", url: "https://www.geonames.org/" },
