@@ -12,11 +12,13 @@
 // Étapes :
 //   land      terres et mers (Natural Earth 10 m), grands lacs en eau
 //   elevation altitude de chaque case (Terrain Tiles, zoom 5)
-//   rivers    grands fleuves (Natural Earth), qui freinent la croissance
-//   zones     lignes guides : pays de 1200, 1914, 1938 et d'aujourd'hui ; une
-//             province ne chevauche jamais deux combinaisons
+//   rivers    fleuves (Natural Earth) : ils freinent la croissance ; les très
+//             grands (BORDER_RIVERS) font frontière
+//   guides    lignes guides : frontières d'aujourd'hui, puis de 1938, 1914 et
+//             1200 là où elles ne doublent pas une frontière déjà tracée
 //   seeds     graines : villes et densité de peuplement, ≈ 13 000 provinces
-//   grow      croissance des provinces au moindre coût (relief, fleuves, bruit)
+//   grow      croissance des provinces au moindre coût (relief, fleuves, bruit),
+//             puis retouches : îles, archipels, lanières, numéros (lib/refine.mjs)
 //   shapes    contours : limites intérieures lissées, côtes de Natural Earth
 //   attributes terrain, emplacements, noms, voisinages, états par défaut
 
@@ -24,12 +26,14 @@ import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "../../server/dataDir.js";
 import { decodePng } from "../../server/hoiElevation.js";
+import { classifyTerrain, provinceSlots } from "../../server/hoiTerrain.js";
 import polygonClipping from "polygon-clipping";
 import { readZip } from "./lib/zip.mjs";
 import { shapefileFromZip } from "./lib/shapefile.mjs";
 import { assemble, smoothArc, toLngLat, traceArcs } from "./lib/vectorize.mjs";
+import { groupArchipelagos, landComponents, mergeStrips, renumber, unifySmallIslands } from "./lib/refine.mjs";
 import {
-  H, N, STEP, W, cached, cellOf, colOf, fillRings, latOf, linesOf, lngOf, ringsOf, rowOf, traceLine,
+  H, N, STEP, W, cached, cellKm2, cellOf, fillRings, latOf, linesOf, lngOf, traceLine,
 } from "./lib/grid.mjs";
 
 export const WORLDMAP_DIR = path.join(DATA_DIR, "worldmap");
@@ -37,14 +41,14 @@ export const SOURCES = path.join(WORLDMAP_DIR, "sources");
 export const WORK = path.join(WORLDMAP_DIR, "work");
 export const OUT = path.join(WORLDMAP_DIR, "v1");
 
-const STAGES = ["land", "elevation", "rivers", "zones", "seeds", "grow", "shapes", "attributes"];
+const STAGES = ["land", "elevation", "rivers", "guides", "seeds", "grow", "shapes", "attributes"];
 const fromArg = process.argv.indexOf("--from");
 const from = fromArg > 0 ? STAGES.indexOf(process.argv[fromArg + 1]) : -1;
 if (fromArg > 0 && from < 0) throw new Error(`--from : une de ${STAGES.join(", ")}`);
 // Refaire une étape efface son cache et ceux des suivantes.
 if (from >= 0) {
   const doomed = {
-    land: ["land"], elevation: ["elevation"], rivers: ["rivers"], zones: ["zones"],
+    land: ["land"], elevation: ["elevation"], rivers: ["rivers", "bigriver"], guides: ["walls", "combo", "today", "zones"],
     seeds: ["seeds"], grow: ["labels"], shapes: [], attributes: [],
   };
   for (const stage of STAGES.slice(from)) for (const name of doomed[stage]) fs.rmSync(path.join(WORK, `${name}.bin`), { force: true });
@@ -129,12 +133,20 @@ const elevation = cached(WORK, "elevation", Int16Array, () => {
 });
 
 // ---------------------------------------------------------------------------
-// rivers : 0 rien, 1 à 3 selon l'importance du fleuve
+// rivers : 0 rien, 1 à 3 selon l'importance du fleuve (ils freinent) ; les
+// très grands fleuves (BORDER_RIVERS) sont en plus infranchissables : ils font
+// frontière entre provinces.
 // ---------------------------------------------------------------------------
+export const BORDER_RIVERS = [
+  "Rhine", "Danube", "Vistula", "Oder", "Elbe", "Dnieper", "Don", "Volga", "Loire", "Nile", "White Nile", "Tigris",
+  "Euphrates", "Mississippi", "St. Lawrence", "Yangtze", "Yellow", "Huang", "Mekong", "Amazon", "Paraná", "Paraná River",
+  "Congo", "Niger", "Ganges", "Indus",
+];
 log("Fleuves…");
+const riverFeatures = () => ne("ne_10m_rivers_lake_centerlines");
 const rivers = cached(WORK, "rivers", Uint8Array, () => {
   const out = new Uint8Array(N);
-  for (const feature of ne("ne_10m_rivers_lake_centerlines")) {
+  for (const feature of riverFeatures()) {
     const rank = Number(feature.properties.scalerank);
     const strength = rank <= 3 ? 3 : rank <= 5 ? 2 : rank <= 6 ? 1 : 0;
     if (!strength) continue;
@@ -144,23 +156,40 @@ const rivers = cached(WORK, "rivers", Uint8Array, () => {
   }
   return out;
 });
+const bigRiver = cached(WORK, "bigriver", Uint8Array, () => {
+  const out = new Uint8Array(N);
+  const names = new Set(BORDER_RIVERS);
+  let count = 0;
+  for (const feature of riverFeatures()) {
+    const { name_en: en, name } = feature.properties;
+    if (!names.has(en) && !names.has(name)) continue;
+    count += 1;
+    for (const line of linesOf(feature.geometry)) traceLine(line, (cell) => { if (land[cell]) out[cell] = 1; });
+  }
+  log(`  ${count} tronçons de très grands fleuves`);
+  return out;
+});
 
 // ---------------------------------------------------------------------------
-// zones : composantes de terre de même combinaison (pays 1200, 1914, 1938,
-// aujourd'hui). Les bandes étroites nées du décalage entre les sources sont
-// rendues à leur voisine.
+// guides : des « murs » entre cases. Les frontières d'aujourd'hui en sont
+// toujours ; une frontière historique (1938, puis 1914, puis 1200) n'en devient
+// une que là où elle passe à plus de GUIDE_DEDUP_CELLS d'un mur déjà gardé (sinon elle
+// double une frontière connue : les arcs parallèles disparaissent).
+// walls : bit 1 = mur avec la case à l'est, bit 2 = avec la case au sud.
+// zones : parties de terre que murs et très grands fleuves séparent.
+// combo : la combinaison des quatre pays de la case (pour les îles).
 // ---------------------------------------------------------------------------
 export const GUIDE_YEARS = [
-  // [année, lecture, clé du pays, tracé approximatif (on l'ondule)]
-  ["1200", () => readGeojson("world_1200.geojson"), (p) => p.NAME, true],
-  ["1914", () => readGeojson("world_1914.geojson"), (p) => p.NAME, true],
-  ["1938", () => readGeojson("world_1938.geojson"), (p) => p.NAME, true],
+  // [année, lecture, clé du pays, tracé approximatif (on l'ondule)] — les plus sûres d'abord
   ["aujourd'hui", () => ne("ne_10m_admin_0_countries"), (p) => p.ADM0_A3, false],
+  ["1938", () => readGeojson("world_1938.geojson"), (p) => p.NAME, true],
+  ["1914", () => readGeojson("world_1914.geojson"), (p) => p.NAME, true],
+  ["1200", () => readGeojson("world_1200.geojson"), (p) => p.NAME, true],
 ];
+const GUIDE_DEDUP_CELLS = 6; // ≈ 30 km
 // Les frontières historiques sont tracées à grands traits droits : on les fait
-// onduler d'environ WARP_CELLS cases (≈ 20 km), l'ordre de grandeur de leur
-// imprécision. Celles d'aujourd'hui (Natural Earth) restent exactes.
-const WARP_CELLS = 4;
+// onduler de WARP_CELLS cases (≈ 25 km), à deux échelles (≈ 60 et ≈ 22 km).
+const WARP_CELLS = 5;
 const WARP_SCALE = 12;
 const warpHash = (x, y, salt) => {
   let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(salt, 982451653);
@@ -173,20 +202,21 @@ const warpNoise = (x, y, salt) => {
   const a = warpHash(x0, y0, salt); const b = warpHash(x0 + 1, y0, salt); const c = warpHash(x0, y0 + 1, salt); const d = warpHash(x0 + 1, y0 + 1, salt);
   return (a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy) * 2 - 1;
 };
-const SLIVER_CORE = 3; // une zone doit faire au moins ≈ 2 × 3 cases de large quelque part
+
+const n4 = (c) => {
+  const i = c % W;
+  return [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c >= W ? c - W : -1, c + W < N ? c + W : -1];
+};
 
 // Remplit les cases de terre sans valeur avec la valeur la plus proche (sur terre).
-// Avec same : seulement entre cases de même valeur dans same.
-const spreadOverLand = (values, same = null) => {
+const spreadOverLand = (values) => {
   let frontier = [];
   for (let c = 0; c < N; c += 1) if (land[c] && values[c]) frontier.push(c);
   while (frontier.length) {
     const next = [];
     for (const c of frontier) {
-      const i = c % W;
-      for (const n of [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c - W, c + W]) {
-        if (n < 0 || n >= N || !land[n] || values[n]) continue;
-        if (same && same[n] !== same[c]) continue;
+      for (const n of n4(c)) {
+        if (n < 0 || !land[n] || values[n]) continue;
         values[n] = values[c];
         next.push(n);
       }
@@ -195,120 +225,155 @@ const spreadOverLand = (values, same = null) => {
   }
 };
 
-// Composantes 4-connexes de terre de même valeur : Int32 (0 = eau).
-const components = (values) => {
+// Un tracé historique dessiné d'un seul trait sur plus de CRUDE_SEGMENT_DEG est
+// schématique (l'est de l'Europe en 1200, par exemple) : on ne s'en sert pas.
+const CRUDE_SEGMENT_DEG = 1.1;
+const guideRaster = ([, load, keyOf, rough]) => {
+  const ids = new Map();
+  let values = new Int32Array(N);
+  const crude = new Uint8Array(N);
+  for (const feature of load()) {
+    const key = keyOf(feature.properties ?? {});
+    if (!key) continue;
+    if (!ids.has(key)) ids.set(key, ids.size + 1);
+    const polygons = feature.geometry?.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry?.type === "MultiPolygon" ? feature.geometry.coordinates : [];
+    for (const polygon of polygons) {
+      fillRings(values, polygon, ids.get(key));
+      if (!rough) continue;
+      for (const ring of polygon) {
+        for (let k = 0; k < ring.length - 1; k += 1) {
+          const [x0, y0] = ring[k]; const [x1, y1] = ring[k + 1];
+          if (Math.hypot((x1 - x0) * Math.cos((y0 * Math.PI) / 180), y1 - y0) > CRUDE_SEGMENT_DEG) traceLine([ring[k], ring[k + 1]], (cell) => { crude[cell] = 1; });
+        }
+      }
+    }
+  }
+  // Autour des traits schématiques, de quoi couvrir l'ondulation.
+  if (rough) {
+    let frontier = [];
+    for (let c = 0; c < N; c += 1) if (crude[c]) frontier.push(c);
+    for (let d = 1; d <= WARP_CELLS + 2 && frontier.length; d += 1) {
+      const next = [];
+      for (const c of frontier) for (const n of n4(c)) if (n >= 0 && !crude[n]) { crude[n] = 1; next.push(n); }
+      frontier = next;
+    }
+  }
+  if (rough) {
+    const warped = new Int32Array(N);
+    for (let j = 0; j < H; j += 1) {
+      for (let i = 0; i < W; i += 1) {
+        const x = i / WARP_SCALE; const y = j / WARP_SCALE;
+        const di = Math.round(WARP_CELLS * (warpNoise(x, y, 1) * 0.55 + warpNoise(x * 2.7, y * 2.7, 2) * 0.45));
+        const dj = Math.round(WARP_CELLS * (warpNoise(x, y, 3) * 0.55 + warpNoise(x * 2.7, y * 2.7, 4) * 0.45));
+        const si = Math.min(W - 1, Math.max(0, i + di)); const sj = Math.min(H - 1, Math.max(0, j + dj));
+        warped[j * W + i] = values[sj * W + si];
+      }
+    }
+    values = warped;
+  }
+  for (let c = 0; c < N; c += 1) if (!land[c]) values[c] = 0;
+  spreadOverLand(values);
+  return { values, count: ids.size, crude };
+};
+
+log("Lignes guides…");
+const guides = (() => {
+  const wallsFile = path.join(WORK, "walls.bin");
+  if (fs.existsSync(wallsFile) && fs.existsSync(path.join(WORK, "combo.bin")) && fs.existsSync(path.join(WORK, "today.bin"))) {
+    return { walls: cached(WORK, "walls", Uint8Array), combo: cached(WORK, "combo", Int32Array), today: cached(WORK, "today", Int32Array) };
+  }
+  const walls = new Uint8Array(N);
+  const near = new Uint8Array(N).fill(255); // distance au mur gardé le plus proche
+  const comboKey = new Float64Array(N);
+  let today = null;
+  const addWall = (c, bit) => { walls[c] |= bit; };
+  const refreshNear = (sources) => {
+    let frontier = sources;
+    for (const c of frontier) near[c] = 0;
+    for (let d = 1; d <= GUIDE_DEDUP_CELLS && frontier.length; d += 1) {
+      const next = [];
+      for (const c of frontier) for (const n of n4(c)) if (n >= 0 && near[n] > d) { near[n] = d; next.push(n); }
+      frontier = next;
+    }
+  };
+  for (const year of GUIDE_YEARS) {
+    const { values, count, crude } = guideRaster(year);
+    const sources = [];
+    let kept = 0; let dropped = 0; let schematic = 0;
+    for (let c = 0; c < N; c += 1) {
+      if (!land[c]) continue;
+      const i = c % W;
+      for (const [n, bit] of [[i < W - 1 ? c + 1 : -1, 1], [c + W < N ? c + W : -1, 2]]) {
+        if (n < 0 || !land[n] || values[n] === values[c]) continue;
+        if (year[3] && (near[c] <= GUIDE_DEDUP_CELLS || near[n] <= GUIDE_DEDUP_CELLS)) { dropped += 1; continue; }
+        if (year[3] && (crude[c] || crude[n])) { schematic += 1; continue; }
+        addWall(c, bit); sources.push(c, n); kept += 1;
+      }
+    }
+    refreshNear(sources);
+    for (let c = 0; c < N; c += 1) comboKey[c] = comboKey[c] * 4096 + values[c];
+    if (!year[3]) today = values;
+    log(`  ${year[0]} : ${count} pays, ${kept} arêtes de mur gardées, ${dropped} qui doublaient une frontière déjà tracée, ${schematic} schématiques`);
+  }
+  const ids = new Map();
+  const combo = new Int32Array(N);
+  for (let c = 0; c < N; c += 1) {
+    if (!land[c]) continue;
+    if (!ids.has(comboKey[c])) ids.set(comboKey[c], ids.size + 1);
+    combo[c] = ids.get(comboKey[c]);
+  }
+  fs.mkdirSync(WORK, { recursive: true });
+  for (const [name, array] of [["walls", walls], ["combo", combo], ["today", today]]) {
+    fs.writeFileSync(path.join(WORK, `${name}.bin`), Buffer.from(array.buffer, array.byteOffset, array.byteLength));
+  }
+  return { walls, combo, today };
+})();
+const { walls, combo, today } = guides;
+
+// Un pas entre deux cases voisines (8-connexes) est-il permis ?
+const wallBetween = (a, b) => {
+  const lo = Math.min(a, b); const hi = Math.max(a, b);
+  if (hi - lo === 1) return (walls[lo] & 1) !== 0;
+  return (walls[lo] & 2) !== 0;
+};
+const passable = (c) => land[c] && !bigRiver[c];
+const canStep = (c, n) => {
+  const d = n - c;
+  if (d === 1 || d === -1 || d === W || d === -W) return !wallBetween(c, n);
+  // Diagonale : par l'un des deux chemins en deux pas.
+  const i = c % W; const ni = n % W;
+  const a = c + (ni - i); const b = n - (ni - i);
+  return (passable(a) && !wallBetween(c, a) && !wallBetween(a, n)) || (passable(b) && !wallBetween(c, b) && !wallBetween(b, n));
+};
+// Limite franchissable pour une fusion : pas de mur, pas de très grand fleuve.
+const crossable = (a, b) => !wallBetween(a, b) && !bigRiver[a] && !bigRiver[b];
+
+const zones = cached(WORK, "zones", Int32Array, () => {
   const comp = new Int32Array(N);
-  let count = 0;
   const stack = new Int32Array(N);
+  let count = 0;
   for (let start = 0; start < N; start += 1) {
-    if (!land[start] || comp[start]) continue;
+    if (!passable(start) || comp[start]) continue;
     count += 1;
     let top = 0; stack[top++] = start; comp[start] = count;
-    const value = values[start];
     while (top) {
-      const c = stack[--top]; const i = c % W;
-      for (const n of [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c - W, c + W]) {
-        if (n < 0 || n >= N || !land[n] || comp[n] || values[n] !== value) continue;
+      const c = stack[--top];
+      for (const n of n4(c)) {
+        if (n < 0 || !passable(n) || comp[n] || wallBetween(c, n)) continue;
         comp[n] = count; stack[top++] = n;
       }
     }
   }
-  return { comp, count };
-};
-
-log("Lignes guides…");
-const zones = cached(WORK, "zones", Int32Array, () => {
-  const combo = new Float64Array(N);
-  let today = null;
-  for (const [year, load, keyOf, rough] of GUIDE_YEARS) {
-    const ids = new Map();
-    let values = new Int32Array(N);
-    for (const feature of load()) {
-      const key = keyOf(feature.properties ?? {});
-      if (!key) continue;
-      if (!ids.has(key)) ids.set(key, ids.size + 1);
-      const id = ids.get(key);
-      const polygons = feature.geometry?.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry?.type === "MultiPolygon" ? feature.geometry.coordinates : [];
-      for (const polygon of polygons) fillRings(values, polygon, id);
-    }
-    if (rough) {
-      const warped = new Int32Array(N);
-      for (let j = 0; j < H; j += 1) {
-        for (let i = 0; i < W; i += 1) {
-          const x = i / WARP_SCALE; const y = j / WARP_SCALE;
-          // Deux échelles : ≈ 60 km et ≈ 25 km, pour qu'aucun trait ne reste droit longtemps.
-          const di = Math.round(WARP_CELLS * (warpNoise(x, y, 1) * 0.5 + warpNoise(x * 2.4, y * 2.4, 2) * 0.5));
-          const dj = Math.round(WARP_CELLS * (warpNoise(x, y, 3) * 0.5 + warpNoise(x * 2.4, y * 2.4, 4) * 0.5));
-          const si = Math.min(W - 1, Math.max(0, i + di)); const sj = Math.min(H - 1, Math.max(0, j + dj));
-          warped[j * W + i] = values[sj * W + si];
-        }
-      }
-      values = warped;
-    }
-    for (let c = 0; c < N; c += 1) if (!land[c]) values[c] = 0;
-    spreadOverLand(values);
-    if (!rough) today = values;
-    for (let c = 0; c < N; c += 1) combo[c] = combo[c] * 4096 + values[c];
-    log(`  ${year} : ${ids.size} pays`);
-  }
-  // Les combinaisons en numéros.
-  const ids = new Map();
-  const zone = new Int32Array(N);
-  for (let c = 0; c < N; c += 1) {
-    if (!land[c]) continue;
-    const key = combo[c];
-    if (!ids.has(key)) ids.set(key, ids.size + 1);
-    zone[c] = ids.get(key);
-  }
-  // Distance (en cases, 4-connexe) à la limite de zone la plus proche.
-  const depth = new Uint8Array(N);
-  let frontier = [];
-  for (let c = 0; c < N; c += 1) {
-    if (!land[c]) continue;
-    const i = c % W;
-    for (const n of [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c - W, c + W]) {
-      if (n >= 0 && n < N && land[n] && zone[n] !== zone[c]) { depth[c] = 1; frontier.push(c); break; }
-    }
-  }
-  for (let d = 2; d <= SLIVER_CORE && frontier.length; d += 1) {
-    const next = [];
-    for (const c of frontier) {
-      const i = c % W;
-      for (const n of [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c - W, c + W]) {
-        if (n < 0 || n >= N || !land[n] || depth[n] || zone[n] !== zone[c]) continue;
-        depth[n] = d; next.push(n);
-      }
-    }
-    frontier = next;
-  }
-  // Une composante sans case profonde est une bande : ses cases prennent la
-  // zone voisine (de proche en proche depuis les composantes solides).
-  const { comp, count } = components(zone);
-  const solid = new Uint8Array(count + 1);
-  for (let c = 0; c < N; c += 1) if (land[c] && (depth[c] === 0 || depth[c] >= SLIVER_CORE)) solid[comp[c]] = 1;
-  const kept = new Int32Array(N);
-  let slivers = 0;
-  for (let c = 0; c < N; c += 1) {
-    if (!land[c]) continue;
-    if (solid[comp[c]]) kept[c] = zone[c]; else slivers += 1;
-  }
-  // D'abord de proche en proche entre cases du même pays d'aujourd'hui (la
-  // frontière exacte l'emporte sur la trace approximative), puis le reste.
-  spreadOverLand(kept, today);
-  spreadOverLand(kept);
-  log(`  ${ids.size} combinaisons, ${count} composantes dont ${count - solid.reduce((s, v) => s + v, 0)} bandes (${slivers} cases rendues)`);
-  // Les composantes finales, numérotées.
-  return components(kept).comp;
+  return comp;
 });
 let zoneCount = 0; for (let c = 0; c < N; c += 1) zoneCount = Math.max(zoneCount, zones[c]);
-log(`  ${zoneCount} zones guides`);
-
+log(`  ${zoneCount} zones (entre murs et très grands fleuves)`);
 
 // ---------------------------------------------------------------------------
 // seeds : ≈ 13 000 graines, plus serrées là où il y a du monde.
 // ---------------------------------------------------------------------------
 export const SEED_TUNING = {
-  target: 11900, // + graines des zones guides et îlots lointains ≈ 13 000 provinces
+  target: 12350, // + graines des zones sans graine et îlots lointains, − fusions ≈ 13 000 provinces
   coarse: 5, // cases de travail par case grossière (0,25°)
   base: 0.12, // poids d'une terre vide
   densityRef: 15, // hab./km² (des villes) pour un poids de 1 en plus
@@ -316,17 +381,48 @@ export const SEED_TUNING = {
   densityCap: 5,
   smoothRadius: 4, // cases grossières
   fixedCityPopulation: 300000, // ces villes gardent leur graine en place
-  minZoneCells: 12, // une zone guide plus petite n'a pas sa propre province
+  minZoneCells: 12, // une zone plus petite n'a pas sa propre province
   lloydPasses: 2,
 };
 const T = SEED_TUNING;
 
+// Les villes de GeoNames, sans les quartiers : une « ville » à moins de
+// SUBURB_KM d'une ville au moins deux fois plus peuplée (arrondissements de
+// Paris, arrondissements de Tokyo…) lui ajoute sa population et disparaît.
+const SUBURB_KM = 10;
+let citiesCache = null;
 export const readCities = () => {
+  if (citiesCache) return citiesCache;
+  const all = readAllCities().sort((a, b) => b.population - a.population);
+  const grid = new Map();
+  const kept = [];
+  for (const city of all) {
+    const gx = Math.floor(city.lng * 5); const gy = Math.floor(city.lat * 5);
+    let parent = null;
+    for (let dx = -1; dx <= 1 && !parent; dx += 1) for (let dy = -1; dy <= 1 && !parent; dy += 1) {
+      for (const other of grid.get(`${gx + dx}:${gy + dy}`) ?? []) {
+        const km = Math.hypot((other.lng - city.lng) * Math.cos((city.lat * Math.PI) / 180), other.lat - city.lat) * 111.32;
+        if (km <= SUBURB_KM && other.population >= 2 * city.population) { parent = other; break; }
+      }
+    }
+    if (parent) { parent.population += city.population; continue; }
+    const copy = { ...city };
+    kept.push(copy);
+    const k = `${gx}:${gy}`;
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(copy);
+  }
+  citiesCache = kept;
+  return kept;
+};
+const readAllCities = () => {
   const zip = readZip(path.join(SOURCES, "cities15000.zip"));
   return zip.read("cities15000.txt").toString("utf8").split("\n").filter(Boolean).map((line) => {
     const f = line.split("\t");
-    return { id: Number(f[0]), name: f[1], ascii: f[2], lat: Number(f[4]), lng: Number(f[5]), country: f[8], population: Number(f[14]) || 0 };
-  }).filter((city) => Number.isFinite(city.lat) && Number.isFinite(city.lng));
+    return { id: Number(f[0]), name: f[1], ascii: f[2], lat: Number(f[4]), lng: Number(f[5]), code: f[7], country: f[8], population: Number(f[14]) || 0 };
+  })
+    // Pas les quartiers ni les arrondissements (PPLX : « Paris 15 Vaugirard »).
+    .filter((city) => Number.isFinite(city.lat) && Number.isFinite(city.lng) && city.code !== "PPLX");
 };
 
 const CW = Math.ceil(W / T.coarse); const CH = Math.ceil(H / T.coarse);
@@ -335,7 +431,6 @@ const coarseOf = (cell) => {
   return Math.floor(j / T.coarse) * CW + Math.floor(i / T.coarse);
 };
 
-// Poids de peuplement de chaque case grossière (lissé), puis facteur par case.
 const densityFactor = (() => {
   const people = new Float64Array(CW * CH);
   const km2 = new Float64Array(CW * CH);
@@ -368,9 +463,8 @@ const densityFactor = (() => {
   return factor;
 })();
 
-// Ordre de Hilbert des cases grossières : des graines bien réparties.
-const hilbert = (x, y, order) => {
-  let d = 0;
+const hilbert = (x0, y0, order) => {
+  let x = x0; let y = y0; let d = 0;
   for (let s = order / 2; s > 0; s /= 2) {
     const rx = (x & s) > 0 ? 1 : 0; const ry = (y & s) > 0 ? 1 : 0;
     d += s * s * ((3 * rx) ^ ry);
@@ -378,7 +472,7 @@ const hilbert = (x, y, order) => {
   }
   return d;
 };
-const random = (seed) => { // hasard reproductible
+const random = (seed) => {
   let s = seed >>> 0;
   return () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 };
@@ -388,23 +482,20 @@ for (let c = 0; c < N; c += 1) zoneCells[zones[c]] += 1;
 const tinyZone = (zone) => zoneCells[zone] < T.minZoneCells;
 
 log("Graines…");
-// seeds.bin : [case, fixe (0/1)] × n
 const seeds = cached(WORK, "seeds", Int32Array, () => {
   const rand = random(1936);
-  // Les villes de chaque case grossière, la plus peuplée d'abord.
   const citiesByCoarse = new Map();
   for (const city of readCities().sort((a, b) => b.population - a.population)) {
     const cell = cellOf(city.lng, city.lat);
-    if (cell < 0 || !land[cell]) continue;
+    if (cell < 0 || !passable(cell)) continue;
     const k = coarseOf(cell);
     if (!citiesByCoarse.has(k)) citiesByCoarse.set(k, []);
     citiesByCoarse.get(k).push({ cell, population: city.population });
   }
-  // Poids de chaque case grossière = surface de terre × facteur.
   const weight = new Float64Array(CW * CH);
   const landCellsOf = new Map();
   for (let c = 0; c < N; c += 1) {
-    if (!land[c] || tinyZone(zones[c])) continue;
+    if (!passable(c) || tinyZone(zones[c])) continue;
     const k = coarseOf(c); const j = Math.floor(c / W);
     weight[k] += Math.cos((latOf(j) * Math.PI) / 180) * densityFactor[k];
     if (!landCellsOf.has(k)) landCellsOf.set(k, []);
@@ -427,7 +518,7 @@ const seeds = cached(WORK, "seeds", Int32Array, () => {
       chosen.push([cell, city && city.population >= T.fixedCityPopulation ? 1 : 0]);
     }
   }
-  // Chaque zone guide assez grande a au moins une graine.
+  // Chaque zone assez grande a au moins une graine.
   const seeded = new Set(chosen.map(([cell]) => zones[cell]));
   const cellsOfZone = new Map();
   for (let c = 0; c < N; c += 1) {
@@ -437,12 +528,12 @@ const seeds = cached(WORK, "seeds", Int32Array, () => {
     cellsOfZone.get(z).push(c);
   }
   for (const cells of cellsOfZone.values()) chosen.push([cells[Math.floor(cells.length / 2)], 0]);
-  log(`  ${chosen.length} graines (${cellsOfZone.size} ajoutées pour des zones guides sans graine)`);
+  log(`  ${chosen.length} graines (${cellsOfZone.size} ajoutées pour des zones sans graine)`);
   return Int32Array.from(chosen.flat());
 });
 
 // ---------------------------------------------------------------------------
-// grow : chaque graine s'étend au moindre coût.
+// grow : chaque graine s'étend au moindre coût ; puis les retouches.
 // ---------------------------------------------------------------------------
 export const GROW_TUNING = {
   noise: 0.75, // amplitude du bruit (bordures irrégulières)
@@ -475,14 +566,12 @@ for (let c = 0; c < N; c += 1) {
 const kmPerStepY = STEP * 111.32;
 const kmPerStepX = new Float32Array(H).map((_, j) => kmPerStepY * Math.cos((latOf(j) * Math.PI) / 180));
 
-// Tas binaire avec clé modifiable.
 const heapCells = new Int32Array(N);
 const heapPos = new Int32Array(N);
 const dist = new Float32Array(N);
 
 const grow = (seedCells) => {
   const label = new Int32Array(N);
-  const seedZone = new Int32Array(seedCells.length + 1);
   dist.fill(Infinity); heapPos.fill(-1);
   let size = 0;
   const up = (start) => {
@@ -508,14 +597,14 @@ const grow = (seedCells) => {
     heapCells[k] = c; heapPos[c] = k;
   };
   seedCells.forEach((cell, k) => {
-    label[cell] = k + 1; seedZone[k + 1] = zones[cell]; dist[cell] = 0;
+    label[cell] = k + 1; dist[cell] = 0;
     heapCells[size] = cell; heapPos[cell] = size; size += 1; up(size - 1);
   });
   while (size) {
     const c = heapCells[0];
     size -= 1; heapPos[c] = -2;
     if (size) { heapCells[0] = heapCells[size]; heapPos[heapCells[0]] = 0; down(0); }
-    const own = label[c]; const zone = seedZone[own]; const dc = dist[c];
+    const own = label[c]; const dc = dist[c];
     const i = c % W; const j = (c - i) / W;
     for (let dj = -1; dj <= 1; dj += 1) {
       const y = j + dj; if (y < 0 || y >= H) continue;
@@ -523,9 +612,7 @@ const grow = (seedCells) => {
         if (!di && !dj) continue;
         const x = i + di; if (x < 0 || x >= W) continue;
         const n = y * W + x;
-        if (!land[n] || heapPos[n] === -2) continue;
-        const nz = zones[n];
-        if (nz !== zone && !tinyZone(nz)) continue;
+        if (!passable(n) || heapPos[n] === -2 || !canStep(c, n)) continue;
         const dx = (di * (kmPerStepX[j] + kmPerStepX[y])) / 2; const dy = dj * kmPerStepY;
         const step = (Math.sqrt(dx * dx + dy * dy) * (noise[c] + noise[n])) / 2
           + Math.abs(elevation[n] - elevation[c]) * G.climbKmPerMeter
@@ -542,12 +629,6 @@ const grow = (seedCells) => {
   return label;
 };
 
-const n4 = (c) => {
-  const i = c % W;
-  return [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, c >= W ? c - W : -1, c + W < N ? c + W : -1];
-};
-
-// Relaxation (Lloyd) : chaque graine libre va au barycentre pondéré de sa province.
 log("Croissance…");
 const labels = cached(WORK, "labels", Int32Array, () => {
   const count = seeds.length / 2;
@@ -576,10 +657,10 @@ const labels = cached(WORK, "labels", Int32Array, () => {
     }
     cells = next;
   }
-  // Les terres sans province (îlots, zones minuscules isolées) prennent la
-  // province la plus proche à moins de 100 km, par terre ou par mer.
+  // Les cases sans province (lits des très grands fleuves, îlots, poches) :
+  // la province la plus proche à moins de 100 km, par terre ou par mer.
   const REACH = 20;
-  const carry = new Int32Array(N); // province portée jusqu'à une case d'eau
+  const carry = new Int32Array(N);
   let frontier = [];
   for (let c = 0; c < N; c += 1) if (label[c]) { carry[c] = label[c]; frontier.push(c); }
   for (let d = 1; d <= REACH && frontier.length; d += 1) {
@@ -594,8 +675,6 @@ const labels = cached(WORK, "labels", Int32Array, () => {
     }
     frontier = next;
   }
-  // Ce qui reste : des îlots lointains. Chacun devient une province, qui
-  // rassemble les îlots à moins de 100 km.
   let extra = 0; let nextLabel = count;
   for (let start = 0; start < N; start += 1) {
     if (!land[start] || label[start]) continue;
@@ -617,9 +696,7 @@ const labels = cached(WORK, "labels", Int32Array, () => {
     }
   }
   log(`  ${extra} provinces d'îlots lointains`);
-  // Filtre majoritaire : une case dont la province est minoritaire autour
-  // d'elle (5 voisines sur 8 ou plus d'une autre, de la même zone guide)
-  // passe à celle-ci. Enlève les pointes d'une case avant le tracé.
+  // Filtre majoritaire (pas à travers un mur ni un très grand fleuve).
   for (let pass = 0; pass < 2; pass += 1) {
     let changed = 0;
     const next = label.slice();
@@ -632,20 +709,25 @@ const labels = cached(WORK, "labels", Int32Array, () => {
         if (!land[n] || zones[n] !== zones[c]) continue;
         counts.set(label[n], (counts.get(label[n]) ?? 0) + 1);
       }
-      for (const [l, count] of counts) {
-        if (l !== label[c] && count >= 5) { next[c] = l; changed += 1; break; }
+      for (const [l, k] of counts) {
+        if (l !== label[c] && k >= 5) { next[c] = l; changed += 1; break; }
       }
     }
     label.set(next);
     log(`  filtre majoritaire ${pass + 1} : ${changed} cases`);
   }
+  // Retouches : îles, archipels, lanières, numéros.
+  const islands = landComponents(land);
+  log(`  petites îles réunies : ${unifySmallIslands({ land, labels: label, today, islands })} cases`);
+  const archipelagos = groupArchipelagos({ land, labels: label, combo, islands });
+  log(`  archipels : ${archipelagos.dust} provinces de poussières d'îles, ${archipelagos.merges} regroupements`);
+  log(`  lanières fondues dans leur voisine : ${mergeStrips({ land, labels: label, crossable, islands })}`);
+  log(`  ${renumber({ land, labels: label })} provinces numérotées`);
   return label;
 });
 
 let provinceCount = 0; for (let c = 0; c < N; c += 1) provinceCount = Math.max(provinceCount, labels[c]);
 log(`  ${provinceCount} provinces`);
-export { labels };
-
 
 // ---------------------------------------------------------------------------
 // shapes : les contours. Chaque province déborde de COAST_BUFFER cases en mer,
@@ -801,6 +883,198 @@ if (!fs.existsSync(shapesFile)) {
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(shapesFile, JSON.stringify({ type: "FeatureCollection", features }));
   log(`  ${features.length} provinces écrites, ${empty} vides, ${broken} anneaux ouverts, ${clipFailed} découpes ratées (${((Date.now() - started) / 1000).toFixed(0)} s)`);
+}
+
+
+// ---------------------------------------------------------------------------
+// attributes : ce que chaque province porte pour toujours (tous scénarios).
+//   provinces.json      [{ id, name, city, terrain, slots, coastal, areaKm2,
+//                          population, anchor, center, elevation, state }]
+//   adjacency.json      { id: [[voisine, "terre" | "fleuve"]…] }
+//   states-default.json découpage mondial par défaut en états (admin-1)
+//   meta.json           version, numéros, sources et licences
+// ---------------------------------------------------------------------------
+export const MAP_VERSION = 1;
+export const SEA_ID_RANGE = [20000, 29999]; // réservés aux zones maritimes (plus tard)
+
+log("Attributs…");
+{
+  const started = Date.now();
+  const count = provinceCount;
+  const cells = new Float64Array(count + 1); const km2 = new Float64Array(count + 1);
+  const sx = new Float64Array(count + 1); const sy = new Float64Array(count + 1);
+  const eSum = new Float64Array(count + 1); const eSq = new Float64Array(count + 1); const eMax = new Float64Array(count + 1).fill(-Infinity);
+  const coastal = new Uint8Array(count + 1);
+  const adjacency = new Map();
+  const link = (a, b, kind) => {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!adjacency.has(x)) adjacency.set(x, new Map());
+      const m = adjacency.get(x);
+      if (m.get(y) !== "terre") m.set(y, kind); // une limite de terre ferme l'emporte
+    }
+  };
+  for (let c = 0; c < N; c += 1) {
+    const l = labels[c];
+    if (!land[c] || !l) continue;
+    const i = c % W; const j = (c - i) / W;
+    const a = cellKm2(j);
+    cells[l] += 1; km2[l] += a; sx[l] += lngOf(i) * a; sy[l] += latOf(j) * a;
+    const e = Math.max(0, elevation[c]);
+    eSum[l] += e; eSq[l] += e * e; eMax[l] = Math.max(eMax[l], e);
+    for (const n of n4(c)) {
+      if (n < 0) continue;
+      if (!land[n]) { coastal[l] = 1; continue; }
+      const m = labels[n];
+      if (m && m !== l && n > c) link(l, m, bigRiver[c] || bigRiver[n] ? "fleuve" : "terre");
+    }
+  }
+  // Villes : la plus peuplée nomme la province ; toutes comptent dans sa population.
+  const population = new Float64Array(count + 1);
+  const bestCity = new Array(count + 1).fill(null);
+  const cityList = readCities();
+  for (const city of cityList) {
+    const cell = cellOf(city.lng, city.lat);
+    if (cell < 0 || !land[cell] || !labels[cell]) continue;
+    const l = labels[cell];
+    population[l] += city.population;
+    if (!bestCity[l] || city.population > bestCity[l].population) bestCity[l] = city;
+  }
+  // Point où bâtir sans ville : la case de la province la plus proche de son centre.
+  const anchorCell = new Int32Array(count + 1).fill(-1);
+  const anchorDist = new Float64Array(count + 1).fill(Infinity);
+  for (let c = 0; c < N; c += 1) {
+    const l = labels[c];
+    if (!land[c] || !l || bestCity[l]) continue;
+    const i = c % W; const j = (c - i) / W;
+    const d = (lngOf(i) - sx[l] / km2[l]) ** 2 + (latOf(j) - sy[l] / km2[l]) ** 2;
+    if (d < anchorDist[l]) { anchorDist[l] = d; anchorCell[l] = c; }
+  }
+  // États par défaut : la région admin-1 majoritaire (Natural Earth).
+  const admin1 = ne("ne_10m_admin_1_states_provinces");
+  const admin1Raster = new Int32Array(N);
+  admin1.forEach((feature, k) => {
+    const g = feature.geometry;
+    for (const polygon of g.type === "Polygon" ? [g.coordinates] : g.coordinates) fillRings(admin1Raster, polygon, k + 1);
+  });
+  const stateVotes = new Map();
+  for (let c = 0; c < N; c += 1) {
+    const l = labels[c];
+    if (!land[c] || !l || !admin1Raster[c]) continue;
+    if (!stateVotes.has(l)) stateVotes.set(l, new Map());
+    const m = stateVotes.get(l);
+    m.set(admin1Raster[c], (m.get(admin1Raster[c]) ?? 0) + 1);
+  }
+  const stateOf = new Array(count + 1).fill(null);
+  const states = {};
+  for (const [l, m] of stateVotes) {
+    const k = [...m].sort((a, b) => b[1] - a[1])[0][0];
+    const p = admin1[k - 1].properties;
+    const code = p.adm1_code || `adm1-${k}`;
+    stateOf[l] = code;
+    if (!states[code]) states[code] = { name: p.name || p.name_en || code, country: p.admin || "", iso: p.iso_a2 || "", provinces: [] };
+    states[code].provinces.push(l);
+  }
+  // Une province sans vote (îlot hors admin-1) : l'état de sa voisine la plus proche.
+  for (let l = 1; l <= count; l += 1) {
+    if (stateOf[l]) continue;
+    const neighbour = [...(adjacency.get(l)?.keys() ?? [])].find((m) => stateOf[m]);
+    if (neighbour) { stateOf[l] = stateOf[neighbour]; states[stateOf[l]].provinces.push(l); }
+  }
+  // Noms : la ville ; sinon la ville la plus proche, « Ville – n », uniques.
+  const cellsByCity = cityList.filter((city) => city.population >= 15000);
+  const grid = new Map();
+  for (const city of cellsByCity) {
+    const k = `${Math.floor(city.lng)}:${Math.floor(city.lat)}`;
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(city);
+  }
+  const nearestCity = ([x, y]) => {
+    for (let r = 0; r <= 8; r += 1) {
+      let best = null; let bestD = Infinity;
+      for (let dx = -r; dx <= r; dx += 1) for (let dy = -r; dy <= r; dy += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        for (const city of grid.get(`${Math.floor(x) + dx}:${Math.floor(y) + dy}`) ?? []) {
+          const d = ((city.lng - x) * Math.cos((y * Math.PI) / 180)) ** 2 + (city.lat - y) ** 2;
+          if (d < bestD) { bestD = d; best = city; }
+        }
+      }
+      if (best) return best.name;
+    }
+    return "";
+  };
+  const round = (v) => Math.round(v * 1e4) / 1e4;
+  const provinces = [];
+  for (let l = 1; l <= count; l += 1) {
+    if (!cells[l]) { provinces.push({ id: l, empty: true }); continue; }
+    const center = [round(sx[l] / km2[l]), round(sy[l] / km2[l])];
+    const city = bestCity[l];
+    const anchor = city ? [round(city.lng), round(city.lat)]
+      : anchorCell[l] >= 0 ? [round(lngOf(anchorCell[l] % W)), round(latOf(Math.floor(anchorCell[l] / W)))] : center;
+    const mean = eSum[l] / cells[l];
+    const elevationStats = { mean: Math.round(mean), relief: Math.round(Math.sqrt(Math.max(0, eSq[l] / cells[l] - mean * mean))), max: Math.round(eMax[l]) };
+    const terrain = classifyTerrain({ lng: center[0], lat: center[1], elevation: elevationStats, population: population[l], areaKm2: km2[l], coastal: Boolean(coastal[l]) });
+    provinces.push({
+      id: l,
+      name: city ? city.name : nearestCity(anchor) || states[stateOf[l]]?.name || `Province ${l}`,
+      city: city ? city.name : "",
+      terrain,
+      slots: provinceSlots(terrain, population[l]),
+      coastal: Boolean(coastal[l]),
+      areaKm2: Math.round(km2[l]),
+      population: Math.round(population[l]),
+      anchor,
+      center,
+      elevation: elevationStats.mean,
+      state: stateOf[l],
+    });
+  }
+  const cityNames = new Set(provinces.filter((p) => p.city).map((p) => p.name));
+  const unnamed = new Map();
+  for (const p of provinces) {
+    if (p.empty || p.city) continue;
+    if (!unnamed.has(p.name)) unnamed.set(p.name, []);
+    unnamed.get(p.name).push(p);
+  }
+  for (const [base, group] of unnamed) {
+    if (group.length === 1 && !cityNames.has(base)) continue;
+    group.forEach((p, k) => { p.name = `${base} – ${k + 1}`; });
+  }
+  // Deux provinces du même nom (Paris en France et au Texas) : la plus peuplée
+  // garde le nom seul, les autres prennent celui de leur état.
+  const byName = new Map();
+  for (const p of provinces) if (!p.empty) { if (!byName.has(p.name)) byName.set(p.name, []); byName.get(p.name).push(p); }
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => b.population - a.population).slice(1).forEach((p) => { if (p.state) p.name = `${p.name} (${states[p.state].name})`; });
+  }
+
+  const adjacencyOut = {};
+  for (const [l, m] of adjacency) adjacencyOut[l] = [...m].sort((a, b) => a[0] - b[0]);
+  const terrains = {};
+  for (const p of provinces) if (!p.empty) terrains[p.terrain] = (terrains[p.terrain] ?? 0) + 1;
+  const meta = {
+    version: MAP_VERSION,
+    generatedAt: new Date().toISOString(),
+    landProvinces: count,
+    landIdRange: [1, count],
+    seaIdRange: SEA_ID_RANGE,
+    states: Object.keys(states).length,
+    terrains,
+    grid: { step: STEP, latTop: 84, latBottom: -58 },
+    tuning: { seeds: SEED_TUNING, grow: GROW_TUNING, borderRivers: BORDER_RIVERS, guideDedupCells: GUIDE_DEDUP_CELLS },
+    sources: [
+      { name: "Natural Earth 10 m (terres, îles, lacs, fleuves, pays, admin-1)", licence: "domaine public", url: "https://www.naturalearthdata.com/" },
+      { name: "GeoNames cities15000", licence: "CC BY 4.0", url: "https://www.geonames.org/" },
+      { name: "historical-basemaps (1200, 1914, 1938)", licence: "GPL-3.0", url: "https://github.com/aourednik/historical-basemaps" },
+      { name: "Terrain Tiles (Terrarium, zoom 5)", licence: "ouverte, attribution Mapzen", url: "https://github.com/tilezen/joerd/blob/master/docs/attribution.md" },
+    ],
+  };
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.writeFileSync(path.join(OUT, "provinces.json"), JSON.stringify(provinces));
+  fs.writeFileSync(path.join(OUT, "adjacency.json"), JSON.stringify(adjacencyOut));
+  fs.writeFileSync(path.join(OUT, "states-default.json"), JSON.stringify({ states, provinceState: Object.fromEntries(provinces.filter((p) => !p.empty).map((p) => [p.id, p.state])) }));
+  fs.writeFileSync(path.join(OUT, "meta.json"), JSON.stringify(meta, null, 2));
+  log(`  ${provinces.length} provinces, ${Object.keys(states).length} états par défaut, terrains ${JSON.stringify(terrains)} (${((Date.now() - started) / 1000).toFixed(0)} s)`);
 }
 
 export { land, elevation, rivers, zones };

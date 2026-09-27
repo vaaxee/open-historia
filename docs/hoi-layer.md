@@ -175,11 +175,60 @@ Au chargement d'une partie, un complexe industriel de départ revient aux vraies
 - Découpage en tuiles par la carte (MapLibre, fait une fois, dans un fil à part) : environ 0,1 s pour les 7 000 provinces ; une vue de la France à zoom 6, environ 13 000 points de contour.
 - Quatre fois plus fin (≈ 2 500 km²) : 0,27 s et 53 000 points, sans souci pour l'affichage. La limite est plutôt le fichier (8,5 Mo aujourd'hui, environ 34 Mo quatre fois plus fin), chargé à l'ouverture de la partie. Deux fois plus fin reste raisonnable : `targetKm2: 5000` dans `PROVINCE_TUNING`.
 
+## La carte mondiale unique (phase 5, en cours)
+
+Modèle de HOI4 : une seule carte de provinces, géographiquement juste, commune à tous les scénarios ; un scénario ne fera plus qu'attribuer les provinces à des pays et à des états. La génération par scénario de la phase 4 sera retirée une fois la bascule faite.
+
+### Étape A : la carte (faite)
+
+Générée une fois, hors du jeu et hors du dépôt, dans `server/data/worldmap/` :
+
+```bash
+node scripts/worldmap/fetch-sources.mjs                         # sources, ≈ 35 Mo
+node scripts/hoi-fetch-elevation.mjs --zoom 5                   # altitude, ≈ 65 Mo
+node --max-old-space-size=12000 scripts/worldmap/build.mjs      # ≈ 6 minutes
+node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
+```
+
+- **Trame de travail** : 0,05° (≈ 5 km), de 58° S à 84° N (sans l'Antarctique).
+- **Graines** : environ 13 000, plus serrées là où vivent les gens. Les villes de GeoNames servent, sans les quartiers : une « ville » à moins de 10 km d'une ville deux fois plus peuplée lui ajoute sa population.
+- **Croissance** : chaque province s'étend au moindre coût. Le relief freine, les fleuves freinent, et un bruit rend les bordures irrégulières.
+- **Très grands fleuves** : ils sont infranchissables, donc ils font frontière. Ce sont le Rhin, le Danube, la Vistule, l'Oder, l'Elbe, le Dniepr, le Don, la Volga, la Loire, le Nil, le Tigre, l'Euphrate, le Mississippi, le Saint-Laurent, le Yangzi, le Fleuve Jaune, le Mékong, l'Amazone, le Paraná, le Congo, le Niger, le Gange et l'Indus.
+- **Lignes guides** : des « murs » que les provinces ne franchissent pas.
+  - Les frontières d'aujourd'hui (Natural Earth) en sont toujours.
+  - Celles de 1938, 1914 et 1200 (historical-basemaps) n'en deviennent que si elles ne doublent pas, à moins de 30 km, une frontière déjà tracée, et si elles ne sont pas schématiques (un trait droit de plus de 120 km).
+  - Elles sont ondulées d'environ 25 km, l'ordre de grandeur de leur imprécision.
+- **Retouches** (`scripts/worldmap/lib/refine.mjs`) :
+  - une petite île (moins de 3 000 km²) n'est jamais coupée, sauf par une frontière d'aujourd'hui ;
+  - les poussières d'îles de même histoire se regroupent par archipel ;
+  - une province en lanière rejoint sa voisine, sauf à travers un mur ou un très grand fleuve ;
+  - les numéros sont refaits selon une courbe de Hilbert.
+- **Contours** : les limites sont suivies en arcs partagés (ni trou ni chevauchement), lissées puis rendues irrégulières. Les côtes sont découpées sur Natural Earth 10 m.
+- **Sorties** (`server/data/worldmap/v1/`) :
+  - `provinces.geojson` ;
+  - `provinces.json` : nom, ville, terrain, emplacements, côte, surface, population, point où bâtir, altitude, état par défaut ;
+  - `adjacency.json` : voisines, « terre » ou « fleuve » ;
+  - `states-default.json` : découpage mondial par défaut en états, d'après l'admin-1 de Natural Earth ;
+  - `meta.json`.
+- **Numéros** : les provinces terrestres vont de 1 à n (≈ 13 100). Les numéros de 20 000 à 29 999 sont réservés aux zones maritimes.
+
+### Sources et licences
+
+| Source | Usage | Licence |
+|---|---|---|
+| Natural Earth 10 m | terres, îles, lacs, fleuves, frontières d'aujourd'hui, admin-1 | domaine public |
+| GeoNames `cities15000` | graines, noms, population | CC BY 4.0 |
+| historical-basemaps (aourednik) | lignes guides 1200, 1914, 1938 | GPL-3.0 |
+| Terrain Tiles (AWS, Mapzen), zoom 5 | relief, terrain | ouverte, attribution Mapzen : <https://github.com/tilezen/joerd/blob/master/docs/attribution.md> |
+
+Rien n'est repris de la carte de HOI4, propriété de Paradox.
+
 ## Vérifier chez soi
 
 ```bash
 npm install
 node --test src/runtime/hoi/*.test.js   # la couche seule
+node --test scripts/worldmap/*.test.js  # la carte mondiale (tracé, retouches)
 npm test                                # toute la suite du projet
 npm run dev                             # lancer le jeu
 ```
