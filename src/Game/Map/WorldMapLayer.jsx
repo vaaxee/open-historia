@@ -27,6 +27,7 @@ import {
 } from "../../runtime/worldmap/borders.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import ArmiesLayer from "./ArmiesLayer.jsx";
+import { getFrontDraw, toggleFrontDrawState } from "./frontDrawStore.js";
 import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 
 export { worldMapPreviewMode };
@@ -145,8 +146,28 @@ const WorldMapLayer = () => {
   useEffect(() => {
     if (!owners) return;
     const ownerLabels = Object.fromEntries(Object.entries(data?.scenario?.newOwners ?? {}).map(([owner, info]) => [owner, info?.label ?? owner]));
-    setWorldMapState({ active: true, mode, owners, ownerLabels, ownersKey: `${mode}:${owners.length}:${owners.join("|").length}` });
+    setWorldMapState({
+      active: true, mode, owners, ownerLabels, ownersKey: `${mode}:${owners.length}:${owners.join("|").length}`,
+      // Phase 7.7 : les états du scénario, pour le panneau Fronts.
+      stateOwners: data?.scenario?.stateOwners ?? null,
+      stateNames: Object.fromEntries(Object.entries(data?.scenario?.stateInfo ?? {}).map(([id, info]) => [id, info?.name ?? id])),
+    });
   }, [owners, mode, data]);
+
+  // Phase 7.7 : pendant qu'on dessine un front (frontDrawStore.js), un clic sur
+  // une province ajoute ou retire son état du tracé.
+  useEffect(() => {
+    if (!map || !data?.useOverrides) return undefined;
+    const onClick = (event) => {
+      if (!getFrontDraw().drawing) return;
+      const feature = map.queryRenderedFeatures?.(event.point, { layers: ["worldmap-fill"] })?.[0];
+      const province = Number(feature?.id);
+      const stateId = Number.isFinite(province) ? data.scenario?.states?.[province - 1] : "";
+      if (stateId) toggleFrontDrawState(stateId);
+    };
+    map.on("click", onClick);
+    return () => map.off("click", onClick);
+  }, [map, data]);
   useEffect(() => () => setWorldMapState({ active: false, owners: null }), []);
 
   // Couleurs et genres de limites, par feature-state : tout la première fois,

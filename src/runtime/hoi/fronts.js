@@ -139,6 +139,15 @@ export const applyFrontOp = (op, context) => {
     return ok(`${armyKey}'s front against ${front.enemy} now ${posture}${next.axis ? ` (axis ${next.axis})` : ""}.`, fronts.map((entry) => (entry.id === front.id ? next : entry)));
   }
 
+  // Un nouveau tracé (le panneau Fronts, 7.7) : vide, toute la frontière.
+  if (kind === "sector") {
+    const next = { ...front, sector: [...new Set(list(op.sector).map(clean).filter(Boolean))] };
+    if (context.map && !frontLine(next, context.map).own.length) return refuse(`the drawn sector touches no state of ${front.enemy}: pick states of yours along the border.`);
+    let nextArmies = armies;
+    if (context.map && armies[armyKey]) nextArmies = { ...armies, [armyKey]: deployFront(armies[armyKey], next, frontLine(next, context.map)) };
+    return ok(`${armyKey}'s front against ${front.enemy} redrawn (${next.sector.length ? `${next.sector.length} state(s)` : "the whole border"}).`, fronts.map((entry) => (entry.id === front.id ? next : entry)), nextArmies);
+  }
+
   if (kind === "disband") {
     const army = armies[armyKey];
     const nextArmies = { ...armies, [armyKey]: { ...army, divisions: list(army.divisions).map((division) => (division.frontId === front.id ? { ...division, frontId: "" } : division)) } };
@@ -165,7 +174,7 @@ export const applyFrontOp = (op, context) => {
     return ok(`${armyKey} sent ${chosen.length} division(s) to the front against ${front.enemy}.`, fronts.map((entry) => (entry.id === front.id ? next : entry)), { ...armies, [armyKey]: nextArmy });
   }
 
-  return refuse(`"${kind}" is not a front operation (create, assign, posture, disband).`);
+  return refuse(`"${kind}" is not a front operation (create, assign, posture, sector, disband).`);
 };
 
 // L'opération « front » d'une IA (economyOps : { op: "front", polity, enemy,

@@ -46,6 +46,7 @@ export const MAP_LAYER_ORDER = [
   // Phase 7.6 : les fronts (traits et flèches), sur les frontières.
   "worldmap-fronts",
   "worldmap-front-arrows",
+  "worldmap-front-draw",
 
   // Draped standing-order lines belong above map cartography but below symbols.
   "units-heading",

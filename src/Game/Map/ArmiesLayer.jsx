@@ -10,6 +10,7 @@ import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { divisionStrength, templatesFor } from "../../runtime/hoi/armies.js";
 import { armyStackFeatures, battleFeatures, frontFeatures } from "./armyFeatures.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
+import { useFrontDraw } from "./frontDrawStore.js";
 
 const selectArmies = (world) => world?.hoi?.armies ?? null;
 const selectFronts = (world) => world?.hoi?.fronts ?? null;
@@ -52,6 +53,12 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
     ? frontFeatures(fronts, { centers, ownerOf, neighboursOf: (id) => supply?.[id]?.neighbours ?? [], colourOf })
     : EMPTY), [fronts, centers, ownerOf, supply, colourOf]);
   const battleMarks = useMemo(() => (battles?.length && centers ? battleFeatures(battles, centers) : EMPTY), [battles, centers]);
+  // Phase 7.7 : les états du front en cours de dessin.
+  const draw = useFrontDraw();
+  const drawn = useMemo(() => (draw.drawing && centers ? {
+    type: "FeatureCollection",
+    features: draw.sector.filter((id) => centers[id]).map((id) => ({ type: "Feature", properties: { stateId: id }, geometry: { type: "Point", coordinates: centers[id] } })),
+  } : EMPTY), [draw, centers]);
 
   useEffect(() => { if (map) enforceMapLayerOrder(map); }, [map, stacks, frontLines, battleMarks]);
 
@@ -76,6 +83,13 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
             "line-width": ["case", ["get", "axis"], 5, 2.5],
             "line-opacity": ["case", ["==", ["get", "posture"], "breakthrough"], 1, 0.75],
           }}
+        />
+      </Source>
+      <Source id="worldmap-front-draw-source" type="geojson" data={drawn}>
+        <Layer
+          id="worldmap-front-draw"
+          type="circle"
+          paint={{ "circle-color": "rgba(255,255,255,0.15)", "circle-radius": 16, "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 }}
         />
       </Source>
       <Source id="worldmap-battles-source" type="geojson" data={battleMarks}>
