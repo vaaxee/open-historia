@@ -139,8 +139,19 @@ test("wired: the schema offers 'front', and the turn applies the fronts after th
   assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front"\]/);
   const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
   const engine = gameplay.indexOf("supplyFor: await supplyForTurn(impactedWorld),");
-  const fronts = gameplay.indexOf("impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt });");
+  const fronts = gameplay.indexOf("impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });");
   assert.ok(engine > 0 && fronts > engine);
+});
+
+test("a country at war that is not the player holds its border by itself; the player's army is left alone", () => {
+  const world = { wars, hoi: { series: "1936", armies: armies(), fronts: [] } };
+  const { world: next, notes } = applyFrontsForTurn(world, { map: map(world), player: "Soviet Union" });
+  const lithuania = next.hoi.fronts.find((front) => front.owner === "Lithuania");
+  assert.equal(lithuania.posture, "hold");
+  assert.deepEqual(lithuania.divisionIds, ["l1"]);
+  assert.ok(["kaunas", "alytus"].includes(next.hoi.armies.Lithuania.divisions[0].stateId), "on its border with the Soviet-held Vilnius");
+  assert.equal(next.hoi.fronts.some((front) => front.owner === "Soviet Union"), false, "the player's fronts are the player's to draw");
+  assert.match(notes[0].text, /Lithuania had no front against Soviet Union; the engine opened one to hold its border, with 1 division/);
 });
 
 test("deploying spreads a front's divisions over its states", () => {

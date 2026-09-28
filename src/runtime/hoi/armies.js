@@ -297,6 +297,27 @@ export const ARMY_PRESETS = Object.freeze({
     OOB(["Italy", "Kingdom of Italy"], { infanterie: 35, blindes: 1, artillerie: 3, chasse: 3, bombardement: 2, flotte: 4 }, 600000, 20000),
     OOB(["Imperialist Japan", "Japan", "Empire of Japan"], { infanterie: 25, blindes: 1, artillerie: 2, chasse: 3, bombardement: 2, flotte: 8 }, 700000, 25000),
     OOB(["Kuomintang China", "China", "Republic of China"], { infanterie: 60, artillerie: 1, chasse: 1 }, 2000000, 50000, 0.5),
+    // Les puissances moyennes (ordres de grandeur de 1936) : sans elles, la
+    // Pologne n'avait que trois divisions.
+    OOB(["Poland", "Second Polish Republic"], { infanterie: 30, artillerie: 2, chasse: 1 }, 800000, 20000, 0.8),
+    OOB(["Romania", "Kingdom of Romania"], { infanterie: 20, artillerie: 1, chasse: 1 }, 500000, 12000, 0.7),
+    OOB(["Czechoslovakia"], { infanterie: 20, blindes: 1, artillerie: 2, chasse: 1 }, 450000, 12000, 0.85),
+    OOB(["Yugoslavia", "Kingdom of Yugoslavia"], { infanterie: 16, artillerie: 1 }, 400000, 10000, 0.7),
+    OOB(["Spain", "Spanish Republic"], { infanterie: 12, artillerie: 1, chasse: 1 }, 400000, 10000, 0.7),
+    OOB(["Turkey", "Republic of Turkey"], { infanterie: 16, artillerie: 1 }, 400000, 10000, 0.7),
+    OOB(["Hungary", "Kingdom of Hungary"], { infanterie: 7 }, 200000, 6000, 0.7),
+    OOB(["Belgium"], { infanterie: 12, artillerie: 1 }, 250000, 6000, 0.85),
+    OOB(["Netherlands"], { infanterie: 8, flotte: 1 }, 200000, 5000, 0.8),
+    OOB(["Sweden"], { infanterie: 6, flotte: 1 }, 150000, 4000, 0.85),
+    OOB(["Finland"], { infanterie: 9 }, 150000, 4000, 0.85),
+    OOB(["Greece", "Kingdom of Greece"], { infanterie: 10 }, 200000, 5000, 0.7),
+    OOB(["Bulgaria", "Kingdom of Bulgaria"], { infanterie: 8 }, 150000, 4000, 0.7),
+    OOB(["Lithuania"], { infanterie: 3 }, 80000, 2000, 0.85),
+    OOB(["Latvia"], { infanterie: 4 }, 80000, 2000, 0.85),
+    OOB(["Estonia"], { infanterie: 3 }, 60000, 1500, 0.85),
+    OOB(["Portugal"], { infanterie: 5, flotte: 1 }, 150000, 4000, 0.7),
+    OOB(["Manchukuo"], { infanterie: 6 }, 150000, 4000, 0.6),
+    OOB(["Mongolia"], { infanterie: 3 }, 40000, 1000, 0.7),
   ]),
 });
 // Tous les autres : quelques divisions d'infanterie incomplètes.

@@ -97,6 +97,7 @@ test("starting armies: the 1936 powers detailed, every other polity a few incomp
   assert.equal(soviet.stockpile.fusils, 90 * 22 + 4 * 11 + 6 * 6);
   const china = summarizeArmy(seedArmy("Kuomintang China"), T36);
   assert.equal(china.byTemplate.infanterie.strength, 0.5, "China's divisions are half-equipped");
+  assert.equal(seedArmy("Poland").divisions.length, 33, "the middle powers have their own order of battle");
   const bahrain = seedArmy("Bahrain");
   assert.equal(bahrain.divisions.length, 3);
   assert.equal(divisionStrength(bahrain.divisions[0], T36.infanterie).overall, 0.8);

@@ -6141,11 +6141,11 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
 // Phase 7.3 : les fronts après les impacts du tour (runtime/worldmap/frontsTurn.js) :
 // ordres de front des IA, fronts sans guerre fermés, divisions redéployées sur
 // la ligne. Le reçu dit ce qui a été refusé.
-const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null } = {}) => {
+const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null, player = "" } = {}) => {
   try {
     const context = await armyMapContext(world);
     if (!context) return world;
-    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date });
+    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date, player });
     for (const note of result.notes) noteReceipt(receipt, note.kind, note.text);
     return result.world;
   } catch (error) {
@@ -7476,7 +7476,7 @@ const applySimulationResult = async ({
     // la carte mondiale et pour une partie qui a des armées.
     supplyFor: await supplyForTurn(impactedWorld),
   });
-  impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt });
+  impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats
