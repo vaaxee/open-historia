@@ -57,10 +57,21 @@ test("rule 2: occupation moves state by state — a neighbour or troops next to 
   assert.equal(ok, "", "Alytus borders Soviet Minsk");
   const far = checkControlOperation({ op: { op: "control", regionId: "klaipeda", toCode: "Soviet Union" }, wars, map: makeMap(), taken: new Map(), allowance: 3 });
   assert.match(far, /Klaipėda does not border any state Soviet Union or its allies hold/);
-  const landing = checkControlOperation({ op: { op: "control", regionId: "klaipeda", toCode: "Soviet Union" }, wars, map: makeMap({}, {}, { klaipeda: ["Soviet Union"] }), taken: new Map(), allowance: 3 });
-  assert.equal(landing, "", "a unit standing in it is enough");
+  const coast = { ...makeMap({}, {}, { klaipeda: ["Soviet Union"] }), isCoastal: (id) => id === "klaipeda" };
+  const landing = checkControlOperation({ op: { op: "control", regionId: "klaipeda", toCode: "Soviet Union" }, wars, map: coast, taken: new Map(), allowance: 3 });
+  assert.equal(landing, "", "a unit landed on its coast is enough");
   const chained = checkControlOperation({ op: { op: "control", regionId: "kaunas", toCode: "Soviet Union" }, wars, map: makeMap({ alytus: "Soviet Union" }), taken: new Map(), allowance: 3 });
   assert.equal(chained, "", "Kaunas borders Alytus once Alytus is held");
+});
+
+test("test F: a unit standing where it could never have gone does not open a front", () => {
+  const wars = warsFor(war);
+  // The "2ème Division Blindée Soviétique", raised inland at Kaunas with no Soviet border in reach.
+  const illegal = checkControlOperation({ op: { op: "contest", regionId: "kaunas", actorCode: "Soviet Union" }, wars, map: makeMap({}, {}, { kaunas: ["Soviet Union"] }), taken: new Map(), allowance: 3 });
+  assert.match(illegal, /Kaunas does not border any state Soviet Union or its allies hold/);
+  // The same unit one step past a Soviet-held Alytus stands lawfully and counts for Klaipėda.
+  const lawful = checkControlOperation({ op: { op: "contest", regionId: "klaipeda", actorCode: "Soviet Union" }, wars, map: makeMap({ alytus: "Soviet Union" }, {}, { kaunas: ["Soviet Union"] }), taken: new Map(), allowance: 3 });
+  assert.equal(lawful, "");
 });
 
 test("rule 2: a front takes at most its allowance in a period", () => {

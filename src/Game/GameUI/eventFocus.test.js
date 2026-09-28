@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildFocusContext,
+  buildNameIndex,
   combineFocusBounds,
   deriveEventFocusBounds,
   findNameMentions,
@@ -305,4 +306,21 @@ test("decoded tile rings become lng/lat bounds, weighted by area", () => {
   assert.ok(big.weight > small.weight * 100, "the mainland ring must outweigh the islet");
   // The islet is well under the mainland-share threshold, so it is dropped.
   near(mergeFeatureParts([big, small]), COUNTRY_BOXES.IRL, 0.05);
+});
+
+// Test F, 15–22 January 1936: "Une réunion urgente des ambassadeurs européens"
+// put the flag of La Réunion on an event about France.
+test("a one-word country is named only with its capital letter: a meeting is not Réunion", () => {
+  const index = buildNameIndex([
+    { token: "France", names: ["France"] },
+    { token: "Réunion", names: ["Réunion"] },
+    { token: "Chad", names: ["Chad"] },
+    { token: "Soviet Union", names: ["Union soviétique", "Soviet Union"] },
+  ]);
+  const found = (text) => findNameMentions(text, [index]).map((match) => match.token);
+  assert.deepEqual(found("La France propose une réunion urgente des ambassadeurs européens."), ["France"]);
+  assert.deepEqual(found("Un cyclone frappe La Réunion."), ["Réunion"]);
+  assert.deepEqual(found("Chad met the minister"), ["Chad"], "at the head of a sentence it still counts");
+  assert.deepEqual(found("the chad of a ballot"), []);
+  assert.deepEqual(found("l'union soviétique"), ["Soviet Union"], "several words: case does not matter");
 });

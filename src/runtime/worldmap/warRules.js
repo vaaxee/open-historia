@@ -121,7 +121,15 @@ export const checkControlOperation = ({ op, wars, map, taken, allowance }) => {
   const side = coBelligerents(wars, attacker);
   const neighbours = list(map.neighboursOf(stateId));
   const touches = neighbours.some((id) => side.has(key(map.controllerOf(id))));
-  const troops = [stateId, ...neighbours].some((id) => list(map.unitOwnersIn(id)).some((owner) => side.has(key(owner))));
+  // A unit counts only where it may stand (unitEntry.js): in a state its side
+  // holds, next to one, or on a coast it landed on. Test F: a division raised
+  // inland at Kaunas before units had any rule, with no Soviet border in reach,
+  // was what let Kaunas be "contested".
+  const standsLawfully = (id) => side.has(key(map.controllerOf(id)))
+    || list(map.neighboursOf(id)).some((next) => side.has(key(map.controllerOf(next))))
+    || Boolean(map.isCoastal?.(id));
+  const troops = [stateId, ...neighbours].some((id) => standsLawfully(id)
+    && list(map.unitOwnersIn(id)).some((owner) => side.has(key(owner))));
   if (!touches && !troops) {
     return `${map.nameOf(stateId)} does not border any state ${attacker} or its allies hold, and none of their units stands in or next to it: the front advances state by state`;
   }

@@ -139,3 +139,30 @@ test("the narrator is told only territorial refusals, and no region code reaches
   assert.match(source, /for \(const event of normalizeArray\(payload\?\.events\)\) scrubRegionCodes\(event, \{ nameOf: nameOfRegion \}\);/);
   assert.match(source, /buildNarrationItems\(events, \{ nameOf: regionNameLookup\(\) \}\)/);
 });
+
+// Test F, 15–22 January: the answer's own war read "URSS" against "Lituanie"; the
+// engine did not see it, started a second one, and the ledger dropped both.
+test("the answer's war is recognised whatever language names its sides", () => {
+  const warUpdates = [{ id: "war-urss-lituanie", op: "start", actors: ["URSS"], opponents: ["Lituanie"], eventIndexes: [0] }];
+  const unannounced = planPlayerWars({ actions: orders(), world, player: "Soviet Union", warUpdates, events: [{ title: "Avancée soviétique vers Kaunas", description: "" }], date: "1936-01-16", language: "fr" });
+  assert.equal(unannounced.started.length, 1);
+  assert.equal(unannounced.started[0].existing.id, "war-urss-lituanie", "the answer's war, not a second one");
+  assert.deepEqual([unannounced.started[0].war.actors, unannounced.started[0].war.opponents], [["Soviet Union"], ["Lithuania"]], "named as the map spells them");
+  const announcedByAnswer = planPlayerWars({ actions: orders(), world, player: "Soviet Union", warUpdates, events: [{ title: "L'URSS déclare la guerre à la Lituanie", description: "" }] });
+  assert.equal(announcedByAnswer.started.length, 0);
+  assert.deepEqual(announcedByAnswer.announced.map((entry) => entry.id), ["war-urss-lituanie"], "kept, and protected as the player's");
+});
+
+test("a war the player declared survives the ledger's salvage, and conquests stand only on kept wars", () => {
+  const source = fs.readFileSync(path.join(path.dirname(url.fileURLToPath(import.meta.url)), "gameplay.js"), "utf8");
+  const ledger = source.slice(source.indexOf("const validateSegmentLedgers = "), source.indexOf("// One segment's storyline records, after its ledgers."));
+  assert.match(ledger, /if \(playerWarIds\.has\(normalizeString\(update\?\.id\)\)\) return;/, "never an orphan of another event's combat");
+  assert.match(ledger, /if \(!warError && !strict\) restorePlayerWars\(candidate, \{ world, receipt \}\);/, "put back after the salvage");
+  const restore = source.slice(source.indexOf("const restorePlayerWars = "), source.indexOf("const addPlayerWars = "));
+  assert.match(restore, /if \(error && error\.includes\(`\$\{record\.id\} \(start\)`\)\) \{/, "undone only if the player's war itself is refused");
+  assert.match(restore, /return \{ \.\.\.entry, warId: record\.id \};/, "the fighting between the two is bound to it");
+  const segment = source.indexOf("const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });");
+  const recheck = source.indexOf("for (const note of recheckControlAgainstLedger(candidate, ledgerWorld)) noteReceipt(draft, \"dropped\", note);", segment);
+  assert.ok(segment > 0 && recheck > segment, "control operations are checked again once the ledger has spoken");
+  assert.match(source, /enforceWarRules\(containers, candidate, world, \{ \.\.\.warRules, isCoastal: await coastLookup\(world\) \}\)/);
+});

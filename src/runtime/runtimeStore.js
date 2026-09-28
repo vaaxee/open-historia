@@ -121,11 +121,34 @@ const applyValue = (key, raw, { normalize = true } = {}) => {
   return true;
 };
 
+// Every authoritative write (a write in this tab, a primed value) is numbered.
+// A read that set off before the latest one is older than what the store holds,
+// whenever its answer lands. Test F: at the end of a turn the new round asked
+// the Actions panel to re-read the orders; that request left before the turn
+// wrote them "resolved" and came back after, still "planned", and put the whole
+// list back on the panel until the page was reloaded.
+let writeSequence = 0;
+const markCanonical = (entry) => {
+  writeSequence += 1;
+  entry.canonicalAt = Date.now();
+  entry.canonicalSeq = writeSequence;
+};
+
+// Pluggable for the tests, which have no server to read from.
+const readers = new Map();
+export const __setRuntimeReaderForTests = (key, read) => {
+  if (read) readers.set(key, read);
+  else readers.delete(key);
+};
+
 const readOne = (key, force) => {
   const entry = entries.get(key);
   if (entry.pending) return entry.pending;
-  entry.pending = SOURCES[key].read({ force })
-    .then((value) => ({ key, value }), () => null)
+  const startedAfter = writeSequence;
+  const read = readers.get(key) ?? SOURCES[key].read;
+  entry.pending = Promise.resolve()
+    .then(() => read({ force }))
+    .then((value) => ({ key, value, startedAfter }), () => null)
     .finally(() => { entry.pending = null; });
   return entry.pending;
 };
@@ -139,7 +162,10 @@ const refreshKeys = (keys, { force = true } = {}) => {
     const game = results.find((result) => result?.key === "game");
     if (game && isStaleGameRead(game.value, gameStamp)) return;
     for (const result of results) {
-      if (result) applyValue(result.key, result.value, { normalize: false });
+      if (!result) continue;
+      // Overtaken by a write while in flight: what the store holds is newer.
+      if (result.startedAfter < (entries.get(result.key).canonicalSeq ?? 0)) continue;
+      applyValue(result.key, result.value, { normalize: false });
     }
   });
 };
@@ -200,7 +226,7 @@ const openChannel = () => {
 const onRuntimeJsonUpdated = (event) => {
   const key = keyForUrl(event?.detail?.url);
   if (!key) return;
-  entries.get(key).canonicalAt = Date.now();
+  markCanonical(entries.get(key));
   applyValue(key, event.detail.value);
   // BroadcastChannel never echoes to its own sender, so this cannot loop.
   channel?.postMessage({ key });
@@ -219,6 +245,9 @@ const onActiveGameChanged = () => {
     entry.loaded = false;
     entry.stale = false;
     entry.canonicalAt = 0;
+    // A read still in flight belongs to the game just left.
+    writeSequence += 1;
+    entry.canonicalSeq = writeSequence;
   }
   void refreshKeys(activeKeys());
 };
@@ -279,7 +308,7 @@ export const subscribeRuntime = (key, notify, { select, seed = MISSING } = {}) =
 // State the caller already holds (a finished turn, a restored snapshot).
 export const primeRuntimeValue = (key, value) => {
   if (!entries.has(key)) return;
-  entries.get(key).canonicalAt = Date.now();
+  markCanonical(entries.get(key));
   applyValue(key, value);
 };
 
@@ -292,6 +321,7 @@ export const __resetRuntimeStoreForTests = () => {
     entry.loaded = false;
     entry.stale = false;
     entry.canonicalAt = 0;
+    entry.canonicalSeq = 0;
     entry.pending = null;
     entry.subscribers.clear();
   }

@@ -48,7 +48,8 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../runtime/mapSettings.js";
-import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
+import { formatGameDateForDisplay, formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 
 dayjs.extend(advancedFormat);
@@ -228,6 +229,12 @@ const formatDate = (value, pattern = "MMM D, YYYY") => {
         return "Undated";
     }
 
+    // The default short date is written in the player's language, not left for
+    // the interface translator (test F: "Jan 17, 1936" in a French events list).
+    if (pattern === "MMM D, YYYY") {
+        const shown = formatGameDateForDisplay(value, getStoredLanguage());
+        if (shown) return shown;
+    }
     // A game date in any year, BC spelled out ("1 March 218 BC"); dayjs only
     // for values that are not game dates (timestamps).
     const readable = formatGameDateReadable(value, pattern);
@@ -866,7 +873,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
         >
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
         <MetricPill icon={<CalendarIcon />} tone="default">
-        {formatDate(event.date)}
+        <span data-no-translate="">{formatDate(event.date)}</span>
         </MetricPill>
         {mapChangeCount > 0 && (
             <MetricPill icon={<MapIcon />} tone="accent" active={showMapChanges} onClick={toggleMapChanges}>

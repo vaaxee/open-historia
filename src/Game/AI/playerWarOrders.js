@@ -16,7 +16,7 @@
 // game's language, and a war the answer started from some other event is moved
 // onto that announcement, which comes first.
 
-import { frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { createPolityNameTranslator, frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
 import { eventDeclaresWar } from "./nativeWarLedger.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -70,8 +70,11 @@ export const declarationEvent = ({ player, target, date = "", language = "en", a
   impacts: { actionIds: [clean(actionId)].filter(Boolean) },
 });
 
-const startsBetween = (record, a, b) => clean(record?.op).toLowerCase() === "start"
-  && atWarWith([{ sideA: record.actors, sideB: record.opponents }], a, b);
+// Test F, 15–22 January: the answer's own war was written "URSS" against
+// "Lituanie"; unrecognised, it stood beside the engine's, the ledger found two
+// wars for one front and dropped both. Names are read as the map spells them.
+const startsBetween = (record, a, b, canon = (name) => name) => clean(record?.op).toLowerCase() === "start"
+  && atWarWith([{ sideA: list(record.actors).map(canon), sideB: list(record.opponents).map(canon) }], a, b);
 
 // For each planned order that declares war: the war the engine must start
 // ({ action, target, war, event }) or the refusal ({ action, reason }).
@@ -83,6 +86,8 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
   const started = [];
   const refused = [];
   const planned = [];
+  const announced = [];
+  const canon = createPolityNameTranslator(world);
   for (const action of list(actions)) {
     if (clean(action?.status || "planned") !== "planned") continue;
     const text = `${clean(action?.title)} ${clean(action?.text ?? action?.rawInput)}`;
@@ -94,20 +99,24 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
     }
     if (atWarWith(world?.wars, player, target) || planned.some((other) => key(other) === key(target))) continue;
     planned.push(target);
-    const existing = list(warUpdates).find((record) => startsBetween(record, player, target)) ?? null;
-    if (existing && list(existing.eventIndexes).some((index) => eventDeclaresWar(list(events)[index]))) continue;
+    const existing = list(warUpdates).find((record) => startsBetween(record, player, target, canon)) ?? null;
+    if (existing && list(existing.eventIndexes).some((index) => eventDeclaresWar(list(events)[index]))) {
+      // Announced by the answer itself: kept, and protected like the engine's own.
+      announced.push({ action, target, id: clean(existing.id) });
+      continue;
+    }
     const id = clean(existing?.id) || `war-${slug(player)}-${slug(target)}-${slug(date) || "start"}`;
     started.push({
       action,
       target,
       existing,
       war: existing
-        ? { ...existing, eventIndexes: [], eventIds: [] }
+        ? { ...existing, actors: [player], opponents: [target], eventIndexes: [], eventIds: [] }
         : { id, op: "start", actors: [player], opponents: [target], eventIndexes: [], eventIds: [], note: `${player} declared war on ${target}` },
       event: declarationEvent({ player, target, date, language, actionId: action?.id, warId: id }),
     });
   }
-  return { started, refused };
+  return { started, refused, announced };
 };
 
 // Puts `event` at `position` in the answer and moves every record that points at

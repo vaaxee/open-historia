@@ -11,11 +11,43 @@ import test from "node:test";
 
 import {
   __resetRuntimeStoreForTests,
+  __setRuntimeReaderForTests,
+  getRuntimeValue,
   isStaleGameRead,
   primeRuntimeValue,
+  refreshRuntimeState,
   runtimeGameStamp,
   subscribeRuntime,
 } from "./runtimeStore.js";
+
+// Test F, 15–22 January 1936: after the turn the Actions panel still showed the
+// turn's orders as "ACTION • PLANIFIÉ" until the page was reloaded.
+test("a read that left before the turn wrote its orders cannot put them back as planned", async (t) => {
+  t.after(() => { __setRuntimeReaderForTests("actions", null); __resetRuntimeStoreForTests(); });
+  __resetRuntimeStoreForTests();
+  const order = { id: "a1", kind: "action", title: "Déclarer la guerre à la Lituanie.", text: "Déclarer la guerre à la Lituanie.", status: "planned" };
+  primeRuntimeValue("actions", [order]);
+  const seen = [];
+  subscribeRuntime("actions", (list) => seen.push(list.map((entry) => entry.status).join(",")));
+
+  // The new round asks for the orders; the server answers late, with the list as it was.
+  let answer;
+  __setRuntimeReaderForTests("actions", () => new Promise((resolve) => { answer = resolve; }));
+  const refresh = refreshRuntimeState(["actions"]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Meanwhile the turn writes them resolved.
+  primeRuntimeValue("actions", [{ ...order, status: "resolved" }]);
+  answer([order]);
+  await refresh;
+
+  assert.equal(getRuntimeValue("actions")[0].status, "resolved");
+  assert.deepEqual(seen, ["planned", "resolved"]);
+
+  // A read that leaves after the write is taken as usual.
+  __setRuntimeReaderForTests("actions", async () => [{ ...order, status: "resolved", title: "x" }]);
+  await refreshRuntimeState(["actions"]);
+  assert.equal(getRuntimeValue("actions")[0].title, "x");
+});
 
 const GAME = { country: "France", gameDate: "1914-06-28", round: 3, difficulty: "normal" };
 

@@ -325,9 +325,20 @@ export const lookupName = (index, value) => {
 //
 // Countries and regions are searched TOGETHER (pass both indexes): "Northern
 // Ireland" only outranks "Ireland" when both are candidates at the same moment.
+// A one-word name must also be written with a capital, as a proper noun is:
+// test F's French event about "une réunion urgente des ambassadeurs" carried the
+// flag of La Réunion. ("Chad", "Jordan", "Turkey" and "Niger" are words too.)
 export const findNameMentions = (text, indexes) => {
   const searched = (Array.isArray(indexes) ? indexes : [indexes]).filter(Boolean);
   const tokens = focusTokens(text);
+  const written = String(text ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const capitalised = (index) => /^[A-Z0-9]/.test(written[index] ?? "");
   const matches = [];
 
   for (let start = 0; start < tokens.length; start += 1) {
@@ -351,6 +362,7 @@ export const findNameMentions = (text, indexes) => {
         }
       }
 
+      if (matched && entry.tokens.length === 1 && !capitalised(start)) matched = false;
       if (matched) {
         matches.push({ end, kind: entry.kind, start, token: entry.token });
         // Longest first within a bucket, so the first hit here is the best one.

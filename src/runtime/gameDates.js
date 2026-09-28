@@ -161,3 +161,22 @@ export const formatGameDateReadable = (value, pattern = "D MMMM YYYY") => {
   };
   return String(pattern).replace(/YYYY|MMMM|MMM|MM|M|DD|Do|D/g, (token) => tokens[token]);
 };
+
+// A date for the screen, in the player's language (Intl), "" when the value is
+// not a game date. English falls back to formatGameDateReadable's own words.
+// Test F: "Jan 17, 1936" stood in the French events list until the interface
+// translator got round to that one string — every date is a string of its own.
+export const formatGameDateForDisplay = (value, language = "en", { month = "short" } = {}) => {
+  const parts = parseGameDate(value);
+  if (!parts) return "";
+  const lang = String(language || "en").trim() || "en";
+  const english = formatGameDateReadable(value, month === "long" ? "MMMM D, YYYY" : "MMM D, YYYY");
+  if (/^en\b/i.test(lang) || parts.year < 1) return english;
+  try {
+    const date = new Date(Date.UTC(2000, parts.month - 1, parts.day));
+    date.setUTCFullYear(parts.year);
+    return new Intl.DateTimeFormat(lang, { day: "numeric", month, year: "numeric", timeZone: "UTC" }).format(date);
+  } catch {
+    return english;
+  }
+};

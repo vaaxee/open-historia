@@ -111,6 +111,7 @@ import {
 } from "./playerDiplomacy.js";
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
 import {
+  atWar,
   capitulationEvent,
   capitulationRecord,
   checkControlOperation,
@@ -852,7 +853,10 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     // establishing event of a record is being unbound, the record goes too.
     const boundBefore = decodeWarUpdates(candidate?.warUpdates);
     const orphaned = new Set();
+    const playerWarIds = new Set((PLAYER_WARS.get(candidate) ?? []).map((entry) => entry.record.id));
     boundBefore.forEach((update, updateIndex) => {
+      // The player's declared war is never an orphan of someone else's combat.
+      if (playerWarIds.has(normalizeString(update?.id))) return;
       const eventIndexes = normalizeArray(update?.eventIndexes)
         .map(Number)
         .filter((index) => Number.isInteger(index) && index >= 0);
@@ -911,6 +915,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     }
     warError = "";
   }
+  if (!warError && !strict) restorePlayerWars(candidate, { world, receipt });
   if (warError) return warError;
 
   // On the salvage pass a malformed ledger row - an agreement with one
@@ -5856,12 +5861,68 @@ const EVENT_INDEX_DECODERS = Object.freeze({
   relationUpdates: decodeRelationUpdates,
   agreementUpdates: decodeAgreementUpdates,
 });
+// The player's wars in one answer ({ record, event, eventId, title }), which the
+// ledger's salvage may not drop (test F, 15–22 January: a combat event the model
+// could not bind took the declared war down with it, and the story then told a
+// "declaration of war cancelled").
+const PLAYER_WARS = new WeakMap();
+const protectPlayerWar = (candidate, entry) => {
+  if (!PLAYER_WARS.has(candidate)) PLAYER_WARS.set(candidate, []);
+  PLAYER_WARS.get(candidate).push(entry);
+};
+
+// After the salvage: a player's war the ledger dropped is put back, tied to its
+// announcement. Any other start between the same two gives way, and the events
+// bound to it (the fighting between those two) are bound to the player's war.
+// Undone only if the ledger refuses the player's war itself; what it may still
+// say about other events is left, as the salvage leaves it.
+const restorePlayerWars = (candidate, { world = {}, receipt = null } = {}) => {
+  for (const { record, event, eventId, title } of PLAYER_WARS.get(candidate) ?? []) {
+    const present = decodeWarUpdates(candidate.warUpdates).some((update) => update.id === record.id && update.op === "start");
+    if (present) continue;
+    const before = { events: candidate.events, warUpdates: candidate.warUpdates };
+    const pair = new Set([...record.actors, ...record.opponents].map((name) => normalizeString(name).toLowerCase()));
+    const samePair = (update) => update.op === "start" && update.actors.length + update.opponents.length === pair.size
+      && [...update.actors, ...update.opponents].every((name) => pair.has(normalizeString(name).toLowerCase()));
+    let events = normalizeArray(candidate.events);
+    let index = events.findIndex((entry) => normalizeString(entry?.id) === eventId && eventId);
+    if (index < 0) index = events.findIndex((entry) => normalizeString(entry?.title) === normalizeString(title));
+    if (index < 0) { events = [...events, event]; index = events.length - 1; }
+    const droppedIds = new Set(decodeWarUpdates(candidate.warUpdates).filter(samePair).map((update) => update.id));
+    const player = new Set(record.actors.map((name) => normalizeString(name).toLowerCase()));
+    const enemy = new Set(record.opponents.map((name) => normalizeString(name).toLowerCase()));
+    const fightsThisWar = (entry) => {
+      const names = normalizeArray(entry?.combatants).map((name) => normalizeString(name).toLowerCase());
+      return names.some((name) => player.has(name)) && names.some((name) => enemy.has(name));
+    };
+    candidate.events = events.map((entry, position) => {
+      if (position === index) return { ...entry, id: normalizeString(entry?.id) || eventId, warId: record.id };
+      const bound = normalizeString(entry?.warId);
+      if (bound === record.id || droppedIds.has(bound) || (!bound && fightsThisWar(entry))) return { ...entry, warId: record.id };
+      return entry;
+    });
+    const eventIdNow = normalizeString(candidate.events[index].id);
+    candidate.warUpdates = [
+      ...decodeWarUpdates(candidate.warUpdates).filter((update) => !samePair(update) && !droppedIds.has(update.id)),
+      { ...record, eventIndexes: [index], eventIds: [eventIdNow] },
+    ];
+    const error = validateWarLedgerPayload(candidate, { world });
+    if (error && error.includes(`${record.id} (start)`)) {
+      candidate.events = before.events;
+      candidate.warUpdates = before.warUpdates;
+      noteReceipt(receipt, "dropped", `The player's war ${record.id} could not be restored after the ledger dropped it — ${firstComplaintLine(error)}`);
+      continue;
+    }
+    noteReceipt(receipt, "adjusted", `The player's war ${record.id} (${record.actors.join(", ")} against ${record.opponents.join(", ")}) was dropped by the ledger's salvage and restored: a war the player declared always stands. Events of the answer that could not be tied to it lost their war link instead.`);
+  }
+};
+
 const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) => {
   if (!candidate || !Array.isArray(candidate.events)) return;
   const player = normalizeString(bundle?.game?.country);
   if (!player) return;
   const language = detectLanguage(candidate.events.map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
-  const { started, refused } = planPlayerWars({
+  const { started, refused, announced } = planPlayerWars({
     actions: normalizeActions(bundle?.actions),
     world: normalizeWorldState(bundle?.world),
     player,
@@ -5870,12 +5931,20 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
     date,
     language,
   });
+  // The answer announced the war itself: that war is the player's, and protected.
+  for (const { id } of announced ?? []) {
+    const record = decodeWarUpdates(candidate.warUpdates).find((entry) => entry.id === id);
+    const event = candidate.events[normalizeArray(record?.eventIndexes)[0]];
+    if (record && event) protectPlayerWar(candidate, { record, event: { ...event, warId: id }, eventId: normalizeString(event.id), title: normalizeString(event.title) });
+  }
   for (const { action, target, war, event, existing } of started) {
     const id = `engine-war-${candidate.events.length + 1}`;
     if (!existing) {
       const index = candidate.events.length;
       candidate.events.push({ ...event, id });
-      candidate.warUpdates = [...decodeWarUpdates(candidate.warUpdates), { ...war, eventIndexes: [index], eventIds: [id] }];
+      const record = { ...war, eventIndexes: [index], eventIds: [id] };
+      candidate.warUpdates = [...decodeWarUpdates(candidate.warUpdates), record];
+      protectPlayerWar(candidate, { record, event: { ...event, id }, eventId: id, title: event.title });
       noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target} and the answer carried no such war, so the engine started it (${war.id}) and announced it. The two are at war: carry it forward.`);
       continue;
     }
@@ -5889,8 +5958,9 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
     }
     const at = insertEventAt(candidate, { ...event, id }, tied.length ? Math.min(...tied) : candidate.events.length, EVENT_INDEX_DECODERS);
     candidate.warUpdates = candidate.warUpdates.map((record) => (record?.id === war.id && normalizeString(record?.op).toLowerCase() === "start"
-      ? { ...record, eventIndexes: [at], eventIds: [id] }
+      ? { ...record, actors: war.actors, opponents: war.opponents, eventIndexes: [at], eventIds: [id] }
       : record));
+    protectPlayerWar(candidate, { record: { ...war, eventIndexes: [at], eventIds: [id] }, event: { ...event, id }, eventId: id, title: event.title });
     noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target}; the answer started that war (${war.id}) from an event that does not announce it, so the engine announced it first and tied the war to that announcement. The two are at war: carry it forward.`);
   }
   for (const { action, reason } of refused) {
@@ -5935,7 +6005,23 @@ const checkClaimsAgainstHolders = (containers, world) => {
 // event order: each control operation and legal transfer is checked against the
 // world as the earlier ones in this answer left it, and what the rules refuse is
 // taken out of the impacts and returned ({ path, family, label, warRule }).
-const enforceWarRules = (containers, candidate, world, { playerPolity = "", spanDays = 7 } = {}) => {
+// Does a state touch the sea? Read off the map's geometry once asked, and
+// remembered (unitEntry.js touchesSea). Null when the map cannot be read.
+const coastLookup = async (world) => {
+  try {
+    const gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+    const known = new Map();
+    const isLand = (point) => Boolean(gazetteer.regionAt(point));
+    return (id) => {
+      if (!known.has(id)) known.set(id, touchesSea(gazetteer.geometryOf(id), isLand));
+      return known.get(id);
+    };
+  } catch {
+    return null;
+  }
+};
+
+const enforceWarRules = (containers, candidate, world, { playerPolity = "", spanDays = 7, isCoastal = null } = {}) => {
   const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
   if (!catalog.length) return [];
   const worldState = normalizeWorldState(world);
@@ -5956,6 +6042,8 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
     neighboursOf: (id) => normalizeArray(byId.get(id)?.adjacencies),
     unitOwnersIn: (id) => unitOwners.get(id) ?? [],
     nameOf: (id) => normalizeString(byId.get(id)?.name) || id,
+    // Where a unit may have landed (warRules.js: a unit counts where it may stand).
+    isCoastal: (id) => (typeof isCoastal === "function" ? isCoastal(id) : false),
   };
   const wars = warsFor(worldState, decodeWarUpdates(candidate?.warUpdates));
   const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
@@ -5999,6 +6087,53 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
     if (Array.isArray(impacts.regionTransfers)) impacts.regionTransfers = keptTransfers;
   }
   return refused;
+};
+
+// The front rules ran before the war ledger, against the wars the answer
+// announced. Test F, 15–22 January: the ledger then dropped the war, and Kaunas
+// stayed "contested" by a power at peace. Once the ledger has spoken, every
+// control operation is checked again against the wars it kept; one that no
+// longer has its war is taken out, and its event is rewritten like any refusal
+// (claimGuard.js). Returns the receipt lines.
+const recheckControlAgainstLedger = (candidate, world) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  const events = normalizeArray(candidate?.events);
+  if (!catalog.length || !events.length) return [];
+  const worldState = normalizeWorldState(world);
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  const controller = new Map(Object.entries(worldState.regionOwnershipOverrides ?? {}));
+  const controllerOf = (id) => normalizeString(controller.get(id)) || normalizeString(byId.get(id)?.country);
+  const wars = warsFor(worldState, decodeWarUpdates(candidate?.warUpdates));
+  const containers = [];
+  const refused = [];
+  const notes = [];
+  events.forEach((event, index) => {
+    const impacts = event?.impacts;
+    if (!impacts || typeof impacts !== "object") return;
+    const path = `$.events[${index}].impacts`;
+    containers.push({ event, impacts, path });
+    if (!Array.isArray(impacts.regionControlOps)) return;
+    impacts.regionControlOps = impacts.regionControlOps.filter((op) => {
+      const kind = normalizeString(op?.op).toLowerCase();
+      if (kind !== "control" && kind !== "contest") return true;
+      const id = normalizeString(op?.regionId);
+      const attacker = normalizeString(kind === "control" ? op?.toCode : op?.actorCode);
+      const defender = controllerOf(id);
+      if (!id || !attacker || !defender || attacker.toLowerCase() === defender.toLowerCase() || atWar(wars, attacker, defender)) {
+        if (kind === "control" && id) controller.set(id, attacker);
+        return true;
+      }
+      const label = normalizeString(op?.regionName) || normalizeString(byId.get(id)?.name) || id;
+      const warRule = `${attacker} is not at war with ${defender}: the war this depended on was not kept by the war ledger`;
+      refused.push({ path, family: "regionControlOps", label, warRule });
+      notes.push(`Event "${normalizeString(event?.title)}": the ${kind} operation on "${label}" was withdrawn — ${warRule}. It did NOT change hands.`);
+      return false;
+    });
+  });
+  if (refused.length) {
+    for (const note of guardRefusedTerritory(containers, refused, { describe: refusalReason })) notes.push(note);
+  }
+  return notes;
 };
 
 // Units on the world map enter a state held by someone outside their side only
@@ -6203,7 +6338,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // capitulation. Simulated turns on a world-map game only (the caller passes
   // warRules); what they refuse is told like any other refusal.
   const warRefused = warRules && captureGuard && Array.isArray(candidate?.events)
-    ? enforceWarRules(containers, candidate, world, warRules)
+    ? enforceWarRules(containers, candidate, world, { ...warRules, isCoastal: await coastLookup(world) })
     : [];
   if (strict && warRefused.length) {
     return warRefused.slice(0, 4)
@@ -12404,6 +12539,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           if (worldChangeError) return worldChangeError;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
           if (ledgerError) return ledgerError;
+          // A conquest stands only on a war the ledger kept (recheckControlAgainstLedger).
+          if (await isWorldMapGame()) {
+            for (const note of recheckControlAgainstLedger(candidate, ledgerWorld)) noteReceipt(draft, "dropped", note);
+          }
           return validateSegmentStorylines(candidate, {
             world: ledgerWorld,
             analysis: worldInitiative.analysis,
