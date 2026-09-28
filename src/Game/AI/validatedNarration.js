@@ -14,14 +14,26 @@
 // runtime/mapSettings.js narrateAfterValidation). Off, or when the request
 // budget has no room, the guard alone holds.
 
-import { assertsCapitulation, assertsChangeOfHands } from "./claimGuard.js";
+import { assertsCapitulation, assertsChangeOfHands, detectLanguage } from "./claimGuard.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
-const place = (entry) => clean(entry?.regionName) || clean(entry?.regionId) || "a region";
+// A map region's code ("imp-rgb-0066DD", "RUS-2321", "danzig~free-city-of-danzig")
+// is never a name the story may use.
+export const looksLikeRegionCode = (value) => /^(imp-rgb-|adm1-)|~|^[A-Z]{3}[-.]\d/.test(clean(value));
 
-// What the engine will apply for one event, in plain lines.
-export const describeAppliedImpacts = (impacts) => {
+// What the engine will apply for one event, in plain lines. `nameOf(id)` gives a
+// region's name when the operation carries only its id: the narrator is never
+// shown a region code, which it would copy into the story.
+export const describeAppliedImpacts = (impacts, { nameOf = () => "" } = {}) => {
+  const place = (entry) => {
+    const named = clean(entry?.regionName);
+    if (named && !looksLikeRegionCode(named)) return named;
+    const looked = clean(nameOf(clean(entry?.regionId)));
+    if (looked && !looksLikeRegionCode(looked)) return looked;
+    const raw = clean(entry?.regionId);
+    return raw && !looksLikeRegionCode(raw) ? raw : "a region";
+  };
   const lines = [];
   for (const transfer of list(impacts?.regionTransfers)) {
     lines.push(`${place(transfer)} passes legally from ${clean(transfer.fromCode) || "its previous owner"} to ${clean(transfer.toCode)}`);
@@ -33,28 +45,51 @@ export const describeAppliedImpacts = (impacts) => {
     else if (kind === "clear_contest") lines.push(`the contest over ${place(op)} ends`);
   }
   for (const claim of list(impacts?.regionClaims)) {
+    // Who holds the claimed region (set by the engine): a claim on Vilnius is a
+    // claim against Poland, whatever the story first said.
+    const holder = clean(claim?.holder);
     lines.push(claim?.drop
       ? `${clean(claim.claimantCode)} renounces its claim on ${place(claim)}`
-      : `${clean(claim.claimantCode)} claims ${place(claim)} (a claim only: no border moves)`);
+      : `${clean(claim.claimantCode)} claims ${place(claim)}${holder ? `, which belongs to ${holder}` : ""} (a claim only: no border moves)`);
   }
   for (const change of list(impacts?.polityChanges)) {
     const operation = clean(change?.operation) || "update";
     lines.push(`polity ${clean(change?.code)}: ${operation}${clean(change?.name) ? ` (${clean(change.name)})` : ""}`);
   }
-  const units = list(impacts?.unitOps).length;
-  if (units) lines.push(`${units} military unit operation${units === 1 ? "" : "s"} (moves, new units, losses)`);
+  // Units are not listed: they move no border, and a line such as "unit
+  // operations" was copied word for word into the story.
   for (const chat of list(impacts?.createdChats)) lines.push(`a diplomatic chat opens: "${clean(chat?.title)}"`);
   return lines;
 };
 
+// Region codes written into a story ("la région identifiée par le code
+// imp-rgb-0066DD") become the region's name; a code with no known name becomes
+// a plain "the region". Returns how many were replaced.
+// The code, and the words that introduce it ("identifiée par le code", "identified
+// by the code"), go together.
+const REGION_CODE = /(?:(?:identifi[ée]+e?s?|désign[ée]+e?s?) par le code |(?:identified|designated) by (?:the )?code |(?:le |the )?code )?\b(imp-rgb-[0-9A-Fa-f]{6}(?:~[a-z0-9-]+(?:-\d+)?)?|[a-z]+~[a-z0-9-]+|adm1-\d+|[A-Z]{3}-\d{3,5})\b/g;
+const UNNAMED = { fr: "cette région", de: "diese Region", es: "esa región", it: "quella regione", en: "the region" };
+export const scrubRegionCodes = (event, { nameOf = () => "" } = {}) => {
+  let replaced = 0;
+  const language = detectLanguage(`${event?.title ?? ""} ${event?.description ?? ""}`);
+  for (const field of ["title", "description"]) {
+    if (typeof event?.[field] !== "string") continue;
+    event[field] = event[field].replace(REGION_CODE, (_match, code) => {
+      replaced += 1;
+      return clean(nameOf(code)) || UNNAMED[language] || UNNAMED.en;
+    }).replace(/\s+/g, " ").trim();
+  }
+  return replaced;
+};
+
 // The narrator's input: every event, its applied changes, and whether the engine
 // already rewrote it as a failed attempt (claimGuard.js).
-export const buildNarrationItems = (events) => list(events).map((event, index) => ({
+export const buildNarrationItems = (events, { nameOf } = {}) => list(events).map((event, index) => ({
   index,
   date: clean(event?.date),
   title: clean(event?.title),
   description: clean(event?.description),
-  appliedChanges: describeAppliedImpacts(event?.impacts),
+  appliedChanges: describeAppliedImpacts(event?.impacts, { nameOf }),
   ...(event?.rewrittenFrom ? { refusedByEngine: true } : {}),
 }));
 
@@ -137,4 +172,5 @@ RULES
 2. Anything in the refused list, and anything the text announces that no appliedChanges line supports, must be told as an attempt that failed, a threat, a demand or a claim — never as accomplished. An event marked refusedByEngine is already a failed attempt: keep it one.
 3. Keep each event's date, actors, place and tone; keep the facts that are consistent. Change as little as the rules require: an already consistent event may be returned unchanged.
 4. Write each event in the language it is already written in. Do not add or remove events, and do not invent new changes.
-5. Return exactly one entry per supplied index.`;
+5. Return exactly one entry per supplied index.
+6. The appliedChanges and refused lines are notes for you, not text for the reader: never copy or translate them word for word, and never write a region code (such as "imp-rgb-0066DD") — name places as a historian would. When a claim names who the region belongs to, it is that polity that reacts.`;

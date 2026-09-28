@@ -77,6 +77,33 @@ export const EXONYMS = Object.freeze(Object.fromEntries(
   EXONYM_ROWS.map(([foreign, english]) => [ownerIdentityKey(foreign), english]),
 ));
 
+// Every polity a text names, as the map's exact names: its key, display name,
+// aliases, and every foreign name of it above ("Lituanie", "Royaume-Uni").
+// Case and accents do not matter; a name must stand as a whole word.
+const foldText = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+export const mentionedPolities = (text, world) => {
+  const haystack = foldText(text);
+  if (!haystack.trim()) return [];
+  const translate = createPolityNameTranslator(world);
+  const labels = new Map(); // folded label -> map name
+  const add = (label, canonical) => {
+    const folded = foldText(label).trim();
+    if (folded.length >= 3 && canonical) labels.set(folded, canonical);
+  };
+  for (const [token, polity] of Object.entries(world?.polityOverrides ?? {})) {
+    add(token, token);
+    add(polity?.name, token);
+    for (const alias of Array.isArray(polity?.aliases) ? polity.aliases : []) add(alias, token);
+  }
+  for (const [foreign, english] of EXONYM_ROWS) {
+    const canonical = translate(english);
+    if (canonical !== english || labels.has(foldText(english).trim())) add(foreign, canonical);
+  }
+  const found = new Set();
+  for (const [label, canonical] of labels) if (haystack.includes(` ${label} `)) found.add(canonical);
+  return [...found];
+};
+
 // The polities a world knows, by folded name: key, display name, aliases, and
 // every owner a region carries. A name two polities answer to identifies nobody.
 const buildPolityIndex = (world) => {

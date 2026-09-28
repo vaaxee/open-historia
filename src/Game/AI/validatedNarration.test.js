@@ -9,6 +9,8 @@ import {
   applyNarration,
   buildNarrationItems,
   describeAppliedImpacts,
+  looksLikeRegionCode,
+  scrubRegionCodes,
   validateNarration,
 } from "./validatedNarration.js";
 import { GAMEPLAY_TOOLS, getGameplayTool } from "./gameplaySchemas.js";
@@ -36,18 +38,34 @@ test("the narrator is shown, per event, exactly what the engine applied", () => 
   assert.deepEqual(describeAppliedImpacts({
     regionTransfers: [{ regionName: "Vyborg", fromCode: "Finland", toCode: "Soviet Union" }],
     regionControlOps: [{ op: "control", regionName: "Kaunas", toCode: "Soviet Union" }],
-    regionClaims: [{ regionName: "Vilnius", claimantCode: "Soviet Union" }],
+    regionClaims: [{ regionId: "imp-rgb-0066DD", claimantCode: "Soviet Union", holder: "Poland" }],
     unitOps: [{}, {}],
-  }), [
+  }, { nameOf: (id) => (id === "imp-rgb-0066DD" ? "Vilnius" : "") }), [
     "Vyborg passes legally from Finland to Soviet Union",
     "Kaunas is now controlled by Soviet Union (occupation; legal owner unchanged)",
-    "Soviet Union claims Vilnius (a claim only: no border moves)",
-    "2 military unit operations (moves, new units, losses)",
-  ]);
+    "Soviet Union claims Vilnius, which belongs to Poland (a claim only: no border moves)",
+  ], "units are not listed, a region is named, a claim says whose region it is");
   const items = buildNarrationItems(events());
   assert.equal(items.length, 2);
-  assert.deepEqual(items[0].appliedChanges, ["2 military unit operations (moves, new units, losses)"]);
+  assert.deepEqual(items[0].appliedChanges, []);
   assert.equal(items[1].appliedChanges[0], "Kaunas is now controlled by Soviet Union (occupation; legal owner unchanged)");
+});
+
+test("the narrator is never shown a region code, even with no name to put instead", () => {
+  const lines = describeAppliedImpacts({ regionClaims: [{ regionId: "imp-rgb-0066DD", claimantCode: "Soviet Union" }] });
+  assert.deepEqual(lines, ["Soviet Union claims a region (a claim only: no border moves)"]);
+  assert.ok(looksLikeRegionCode("imp-rgb-0066DD") && looksLikeRegionCode("danzig~free-city-of-danzig") && !looksLikeRegionCode("Vilnius"));
+});
+
+test("a region code in a story becomes the region's name, with the words that introduced it", () => {
+  const event = {
+    title: "Revendication sur imp-rgb-0066DD",
+    description: "L'Union soviétique formule une revendication sur la région identifiée par le code imp-rgb-0066DD, et sur RUS-2321, sans mouvement de troupes.",
+  };
+  const replaced = scrubRegionCodes(event, { nameOf: (code) => (code === "imp-rgb-0066DD" ? "Vilnius" : "") });
+  assert.equal(replaced, 3);
+  assert.equal(event.title, "Revendication sur Vilnius");
+  assert.equal(event.description, "L'Union soviétique formule une revendication sur la région Vilnius, et sur cette région, sans mouvement de troupes.");
 });
 
 test("an answer is used only whole: one entry per event, each with a title and a description", () => {

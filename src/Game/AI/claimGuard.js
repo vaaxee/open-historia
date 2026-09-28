@@ -57,31 +57,34 @@ export const detectLanguage = (text) => {
   return points >= 2 ? best : "en";
 };
 
+// The reader sees a story, not the engine: plain prose in the event's language,
+// with no technical reason in it (those go to the receipt, in English, for the
+// next turn's model).
 const WORDING = {
   en: {
     title: (title) => `Attempted: ${title}`,
-    body: (title, reasons) => `What this event announced ("${title}") did NOT happen: the engine refused it${reasons ? ` (${reasons})` : ""}. The attempt fails; no border moves, and no government surrenders.`,
-    partial: (reasons) => `The engine refused part of this${reasons ? ` (${reasons})` : ""}: that part did NOT happen, and no other border moved.`,
+    body: () => "The attempt comes to nothing: no border moves and no government gives way. What was announced did not happen.",
+    partial: () => "Not all of it came to pass, though: the rest of what was announced did not happen, and no other border moved.",
   },
   fr: {
     title: (title) => `Tentative : ${title}`,
-    body: (title, reasons) => `Ce que cet événement annonçait (« ${title} ») n'a PAS eu lieu : le moteur l'a refusé${reasons ? ` (${reasons})` : ""}. La tentative échoue ; aucune frontière ne bouge et aucun gouvernement ne capitule.`,
-    partial: (reasons) => `Le moteur a refusé une partie de ces changements${reasons ? ` (${reasons})` : ""} : cette partie n'a PAS eu lieu, et aucune autre frontière n'a bougé.`,
+    body: () => "La tentative tourne court : aucune frontière ne bouge et aucun gouvernement ne cède. Ce qui était annoncé n'a pas eu lieu.",
+    partial: () => "Tout ne s'est pas passé comme annoncé : le reste n'a pas eu lieu, et aucune autre frontière n'a bougé.",
   },
   de: {
     title: (title) => `Versuch: ${title}`,
-    body: (title, reasons) => `Was dieses Ereignis ankündigte („${title}“), ist NICHT geschehen: die Engine hat es abgelehnt${reasons ? ` (${reasons})` : ""}. Der Versuch scheitert; keine Grenze verschiebt sich, keine Regierung kapituliert.`,
-    partial: (reasons) => `Die Engine hat einen Teil davon abgelehnt${reasons ? ` (${reasons})` : ""}: dieser Teil ist NICHT geschehen.`,
+    body: () => "Der Versuch läuft ins Leere: keine Grenze verschiebt sich, keine Regierung gibt nach. Was angekündigt war, ist nicht geschehen.",
+    partial: () => "Nicht alles kam jedoch wie angekündigt: der Rest ist nicht geschehen, und keine weitere Grenze hat sich verschoben.",
   },
   es: {
     title: (title) => `Intento: ${title}`,
-    body: (title, reasons) => `Lo que anunciaba este evento («${title}») NO ha ocurrido: el motor lo rechazó${reasons ? ` (${reasons})` : ""}. El intento fracasa; ninguna frontera se mueve y ningún gobierno capitula.`,
-    partial: (reasons) => `El motor rechazó una parte de esto${reasons ? ` (${reasons})` : ""}: esa parte NO ha ocurrido.`,
+    body: () => "El intento queda en nada: ninguna frontera se mueve y ningún gobierno cede. Lo anunciado no ha ocurrido.",
+    partial: () => "Sin embargo, no todo ocurrió como se anunció: el resto no tuvo lugar y ninguna otra frontera se movió.",
   },
   it: {
     title: (title) => `Tentativo: ${title}`,
-    body: (title, reasons) => `Ciò che questo evento annunciava («${title}») NON è avvenuto: il motore l'ha respinto${reasons ? ` (${reasons})` : ""}. Il tentativo fallisce; nessun confine si sposta e nessun governo capitola.`,
-    partial: (reasons) => `Il motore ha respinto una parte di questo${reasons ? ` (${reasons})` : ""}: quella parte NON è avvenuta.`,
+    body: () => "Il tentativo non approda a nulla: nessun confine si sposta e nessun governo cede. Quanto annunciato non è avvenuto.",
+    partial: () => "Non tutto però è andato come annunciato: il resto non è avvenuto e nessun altro confine si è spostato.",
   },
 };
 

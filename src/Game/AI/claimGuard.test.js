@@ -47,9 +47,8 @@ test("a refused capture is rewritten as a failed attempt, in French, keeping the
     describe: (entry) => `${entry.ownerMismatch.regionName} belongs to ${entry.ownerMismatch.actualOwner}, not to ${entry.fromCode}`,
   });
   assert.equal(event.title, "Tentative : Lituanie : Chute de Vilnius et reddition sans conditions");
-  assert.match(event.description, /n'a PAS eu lieu : le moteur l'a refusé \(Vilnius belongs to Poland, not to Lithuania\)/);
-  assert.match(event.description, /aucune frontière ne bouge et aucun gouvernement ne capitule/);
-  assert.doesNotMatch(event.description, /prennent le contrôle/);
+  assert.equal(event.description, "La tentative tourne court : aucune frontière ne bouge et aucun gouvernement ne cède. Ce qui était annoncé n'a pas eu lieu.");
+  assert.doesNotMatch(event.description, /moteur|belongs to|prennent le contrôle/, "plain French, no engine talk, no English reason");
   assert.equal(event.rewrittenFrom.title, "Lituanie : Chute de Vilnius et reddition sans conditions");
   assert.equal(notes.length, 1);
   assert.match(notes[0], /This did NOT happen: no border moved/);
@@ -85,14 +84,14 @@ test("an event enacted in part keeps its story and says which part did NOT happe
     describe: () => "Vilnius belongs to Poland, not to Lithuania",
   });
   assert.equal(event.title, "Les Soviétiques prennent Vilnius et Kaunas");
-  assert.match(event.description, /^L'Armée rouge occupe Kaunas et avance sur Vilnius\. Le moteur a refusé une partie de ces changements \(Vilnius belongs to Poland, not to Lithuania\) : cette partie n'a PAS eu lieu/);
-  assert.match(notes[0], /enacted only in part/);
+  assert.equal(event.description, "L'Armée rouge occupe Kaunas et avance sur Vilnius. Tout ne s'est pas passé comme annoncé : le reste n'a pas eu lieu, et aucune autre frontière n'a bougé.");
+  assert.match(notes[0], /enacted only in part: the engine refused Vilnius belongs to Poland, not to Lithuania/, "the reason goes to the receipt");
 });
 
 test("the English wording for an English event", () => {
   const event = rewriteAsAttempt({ title: "Soviet troops capture Vilnius", description: "The Red Army takes the city and the Lithuanian government flees to the west." }, { reasons: "Vilnius belongs to Poland" });
   assert.equal(event.title, "Attempted: Soviet troops capture Vilnius");
-  assert.match(event.description, /did NOT happen: the engine refused it \(Vilnius belongs to Poland\)/);
+  assert.equal(event.description, "The attempt comes to nothing: no border moves and no government gives way. What was announced did not happen.");
 });
 
 test("the guard runs on every simulated turn after the refusals are known, never on a Game Master edit", () => {

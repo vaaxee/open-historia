@@ -96,8 +96,10 @@ import {
   HOI_TECH_TREE_TOOL,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
-import { canonicalizePayloadPolityNames } from "../../runtime/polityExonyms.js";
+import { canonicalizePayloadPolityNames, mentionedPolities } from "../../runtime/polityExonyms.js";
 import { guardRefusedTerritory } from "./claimGuard.js";
+import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
+import { planPlayerWars } from "./playerWarOrders.js";
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
 import {
   capitulationEvent,
@@ -112,7 +114,7 @@ import {
 import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
 import { loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
-import { applyNarration, buildNarrationItems, validateNarration } from "./validatedNarration.js";
+import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, hashText, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
@@ -5747,6 +5749,67 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
 // place. buildTransferFeedback above is the in-turn version: it spends up to two
 // hundred region names on the one retry. By the next turn that vocabulary is a
 // lookup away, so the receipt only says what failed to land and why.
+
+// The player's declarations of war, into one answer (playerWarOrders.js): the
+// engine's event goes at the END of the answer's events, so the indexes other
+// records cite stay right, and its war record cites it.
+const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) => {
+  if (!candidate || !Array.isArray(candidate.events)) return;
+  const player = normalizeString(bundle?.game?.country);
+  if (!player) return;
+  const warUpdates = decodeWarUpdates(candidate.warUpdates);
+  const { started, refused } = planPlayerWars({
+    actions: normalizeActions(bundle?.actions),
+    world: normalizeWorldState(bundle?.world),
+    player,
+    warUpdates,
+    date,
+  });
+  for (const { action, target, war, event } of started) {
+    const index = candidate.events.length;
+    candidate.events.push({ ...event, id: `engine-war-${index + 1}` });
+    warUpdates.push({ ...war, eventIndexes: [index], eventIds: [`engine-war-${index + 1}`] });
+    noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target} and the answer carried no such war, so the engine started it (${war.id}). The two are at war: carry it forward.`);
+  }
+  if (started.length) candidate.warUpdates = warUpdates;
+  for (const { action, reason } of refused) {
+    noteReceipt(receipt, "dropped", `The player's order "${normalizeString(action?.title)}": ${reason}.`);
+  }
+};
+
+// Every resolved claim gets its region's name and holder (for the story and the
+// narrator); a claim whose event has a neighbour react as though the region were
+// its own is returned ({ path, regionName, holder, claimant, problem }).
+const checkClaimsAgainstHolders = (containers, world) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!catalog.length) return [];
+  const worldState = normalizeWorldState(world);
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  const holderOf = (id) => normalizeString(worldState.regionSovereigntyOverrides?.[id])
+    || normalizeString(worldState.regionOwnershipOverrides?.[id])
+    || normalizeString(byId.get(id)?.country);
+  const problems = [];
+  for (const { event, impacts, path } of containers) {
+    let mentioned = null;
+    for (const claim of normalizeArray(impacts?.regionClaims)) {
+      const id = normalizeString(claim?.regionId);
+      const row = byId.get(id);
+      if (!row || !claim || typeof claim !== "object") continue;
+      const claimant = normalizeString(claim.claimantCode);
+      const holder = holderOf(id);
+      const regionName = normalizeString(row.name) || id;
+      claim.regionName = regionName;
+      if (holder && holder.toLowerCase() !== claimant.toLowerCase()) claim.holder = holder;
+      if (claim.drop) continue;
+      mentioned ??= mentionedPolities(`${event?.title ?? ""}. ${event?.description ?? ""}`, worldState);
+      const neighbourOwners = normalizeArray(row.adjacencies).map(holderOf).filter(Boolean);
+      const problem = checkClaimHolder({ regionName, holder, claimant, mentioned, neighbourOwners });
+      if (problem) problems.push({ path, regionName, holder, claimant, problem });
+    }
+  }
+  return problems;
+};
+
 // The world map's war rules over one answer (runtime/worldmap/warRules.js), in
 // event order: each control operation and legal transfer is checked against the
 // world as the earlier ones in this answer left it, and what the rules refuse is
@@ -5931,6 +5994,19 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   for (const entry of unresolvedControlOps) {
     noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)));
+  }
+  // Claims: whose land it is (claimHolderCheck.js). Each claim is given its
+  // region's name and holder; a story that has a neighbour react as though the
+  // region were its own, and never names the real holder, is sent back once with
+  // the holder named, or noted in the receipt (and the narrator told).
+  if (captureGuard && Array.isArray(candidate?.events)) {
+    const claimProblems = checkClaimsAgainstHolders(containers, world);
+    if (strict && claimProblems.length) {
+      return claimProblems.slice(0, 3).map(describeClaimHolderFeedback).join("\n");
+    }
+    for (const problem of claimProblems) {
+      noteReceipt(receipt, "adjusted", describeClaimHolderReceipt({ ...problem, title: titleAt(problem.path) }));
+    }
   }
   // A story may not announce what the engine refused (claimGuard.js): an event
   // whose territorial operations were refused, and whose text still says the land
@@ -12086,6 +12162,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               }
             }
           }
+          // The player's declarations of war (playerWarOrders.js): a war the player
+          // ordered and the answer left out is started by the engine, with its own
+          // event, before the war rules read the answer; an order that names nobody
+          // is refused in the receipt. The first segment only: orders are the round's.
+          if (segmentIndex === 0) addPlayerWars(candidate, bundle, { date: addIsoDays(state.segmentOrigin, 1) || state.segmentOrigin, receipt: draft });
           // The war ledger must see the sanitized impacts, so world changes go first.
           const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, {
             strictTransfers: strict,
@@ -12130,12 +12211,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // The story after validation: the text is rewritten to match what the engine
       // kept, with what it refused in this segment.
       if (segmentGeneration?.source !== "fallback" && narrateAfterValidationEnabled()) {
+        // Only what the story could get wrong: land, claims, wars, treaties. A unit
+        // left off the map or a malformed field is no news, and the narrator wrote
+        // it into the story ("sans réussir à positionner un groupe…").
         const refusals = normalizeArray(segmentDraft?.notes)
           .filter((note) => note?.kind === "dropped" || note?.kind === "withheld")
           .map((note) => normalizeString(note?.text))
-          .filter(Boolean);
+          .filter((text) => text && NARRATION_REFUSAL.test(text) && !NARRATION_NOISE.test(text));
         await narrateValidatedSegment(payload, { refusals, requests: state.requests, signal, receipt: state.receipt });
       }
+      // No region code ever reaches the page (validatedNarration.js scrubRegionCodes).
+      const nameOfRegion = regionNameLookup();
+      for (const event of normalizeArray(payload?.events)) scrubRegionCodes(event, { nameOf: nameOfRegion });
 
       screenSegmentPayload(payload, {
         analysis: worldInitiative.analysis,
@@ -12240,6 +12327,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // model may fail — either way the text stays as the guard left it (claimGuard.js).
 const narrateAfterValidationEnabled = () => getMapSettingDefaultOn(MAP_SETTING_KEYS.narrateAfterValidation);
 
+// A region's name by id, from the map's compact catalog ("" when unknown).
+const regionNameLookup = () => {
+  const names = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
+  return (id) => names.get(normalizeString(id)) || "";
+};
+const NARRATION_REFUSAL = /transfer|control operation|claim|war|treaty|capitulat|change of hands|did NOT happen/i;
+const NARRATION_NOISE = /could not be placed|was malformed|malformed and ignored|left off the map/i;
+
 const narrateValidatedSegment = async (payload, { refusals = [], requests = null, signal = null, receipt = null } = {}) => {
   const events = normalizeArray(payload?.events);
   if (!events.length) return 0;
@@ -12251,7 +12346,7 @@ const narrateValidatedSegment = async (payload, { refusals = [], requests = null
       validatePayload: (candidate) => validateNarration(candidate, events.length),
       userMessage: "Rewrite the supplied events' titles and descriptions so that they state only what the engine applied. Return exactly one entry per supplied index.",
       variables: {
-        narrationItems: JSON.stringify(buildNarrationItems(events), null, 2),
+        narrationItems: JSON.stringify(buildNarrationItems(events, { nameOf: regionNameLookup() }), null, 2),
         narrationRefusals: refusals.length ? refusals.map((text) => `- ${text}`).join("\n") : "(nothing was refused)",
       },
     });
