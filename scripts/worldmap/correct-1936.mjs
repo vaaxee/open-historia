@@ -119,6 +119,16 @@ export const NEW_OWNERS = {
       + "Portugal and Sweden. Administrator: Joseph Le Fur (France). About 60,000 inhabitants (Moroccans, Spaniards, Jews, Europeans). "
       + "Demilitarised and neutral, with a gendarmerie; a free port and a hub of trade, banking, smuggling and espionage, coveted by Spain and Italy.",
   },
+  Bahrain: {
+    color: [196, 60, 70],
+    label: "Bahreïn",
+    aliases: ["Bahrain", "Bahreïn", "Bahrein", "Baḥrayn"],
+    tags: ["british puppet"],
+    flag: FLAGS_1936.Bahrain,
+    note: "Sheikhdom under British protection (treaties of 1861, 1880 and 1892): the Al Khalifa rule at home, Britain holds its foreign relations and defence. "
+      + "Ruler: Sheikh Hamad bin Isa Al Khalifa; British Political Agent in Manama, and Charles Belgrave as the ruler's adviser since 1926. About 90,000 inhabitants. "
+      + "Oil struck in 1932 (Bahrain Petroleum Company, an American concession) is replacing the collapsing pearl trade; Persia and Ibn Saud both press claims on the islands.",
+  },
 };
 const EXTRA_ALIASES = {
   Danzig: ["Danzig", "Free City of Danzig"], Tangier: ["Tangier", "Tanger", "Tangier Zone"], Ifni: ["Ifni", "Sidi Ifni"],
@@ -147,6 +157,8 @@ const COLONIES_1936 = {
   YEM: { owner: "Yemen", byRegion: { Lahij: "United Kingdom", Abyan: "United Kingdom", "Al Dali'": "United Kingdom", Shabwah: "United Kingdom", Hadramawt: "United Kingdom", "Al Mahrah": "United Kingdom", Aden: "United Kingdom" } },
   OMN: "Oman",
   MMR: "British Raj",
+  // Bahreïn, protectorat britannique : un pays ajouté par la correction (NEW_OWNERS).
+  BHR: "Bahrain",
 };
 const colonialOwner = (today, regionName) => {
   const entry = COLONIES_1936[today];
@@ -397,7 +409,8 @@ const CHECKS = [
   ["Colonies d'Asie et d'Arabie", [["Sanaa (Yémen)", 44.21, 15.35, "Yemen"], ["Aden (protectorat)", 45.03, 12.79, "United Kingdom"], ["Mukalla (Hadramaout)", 49.12, 14.54, "United Kingdom"],
     ["Mascate (Oman)", 58.41, 23.59, "Oman"], ["Nizwa (Oman)", 57.53, 22.93, "Oman"], ["Singapour", 103.85, 1.29, "United Kingdom"],
     ["Port Moresby (Papouasie)", 147.18, -9.44, "Dominion of Australia"], ["Rabaul (Nouvelle-Guinée)", 152.18, -4.2, "Dominion of Australia"],
-    ["Lae (Nouvelle-Guinée)", 147.0, -6.72, "Dominion of Australia"], ["Rangoun (Birmanie)", 96.16, 16.8, "British Raj"], ["Mandalay (Birmanie)", 96.08, 21.97, "British Raj"]]],
+    ["Lae (Nouvelle-Guinée)", 147.0, -6.72, "Dominion of Australia"], ["Rangoun (Birmanie)", 96.16, 16.8, "British Raj"], ["Mandalay (Birmanie)", 96.08, 21.97, "British Raj"],
+    ["Manama (Bahreïn)", 50.58, 26.22, "Bahrain"]]],
   ["Afrique de l'Ouest", [["Monrovia", -10.8, 6.3, "Liberia"], ["Gbarnga", -9.47, 7.0, "Liberia"], ["Harper", -7.72, 4.38, "Liberia"],
     ["Freetown (Sierra Leone)", -13.23, 8.48, "United Kingdom"], ["Lagos (Nigeria)", 3.39, 6.45, "United Kingdom"], ["Kano (Nigeria)", 8.52, 12.0, "United Kingdom"],
     ["Accra (Côte-de-l'Or)", -0.19, 5.6, "United Kingdom"], ["Ho (Togo britannique)", 0.47, 6.6, "United Kingdom"], ["Bathurst (Gambie)", -16.58, 13.45, "United Kingdom"],

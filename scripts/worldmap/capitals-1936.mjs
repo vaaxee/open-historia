@@ -36,5 +36,5 @@ export const CAPITALS_1936 = Object.freeze({
   "Tangier International Zone": ["Tangier", -5.8, 35.77], "Tannu Tuva": ["Kyzyl", 94.45, 51.72], Tibet: ["Lhasa", 91.13, 29.65],
   Turkey: ["Ankara", 32.85, 39.93], "United Kingdom": ["London", -0.13, 51.51], "United States": ["Washington", -77.04, 38.9],
   Uruguay: ["Montevideo", -56.16, -34.9], Venezuela: ["Caracas", -66.9, 10.49], Yemen: ["Sana'a", 44.21, 15.35],
-  Yugoslavia: ["Belgrade", 20.46, 44.82], Yunnan: ["Kunming", 102.83, 24.88],
+  Yugoslavia: ["Belgrade", 20.46, 44.82], Yunnan: ["Kunming", 102.83, 24.88], Bahrain: ["Manama", 50.58, 26.22],
 });

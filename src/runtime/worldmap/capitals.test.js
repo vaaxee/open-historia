@@ -74,7 +74,11 @@ test("the world summary gives the capitals, and the correction writes and checks
   for (const [code, owner] of [["ERI", "Italy"], ["SAH", "Spain"], ["GNQ", "Spain"], ["CPV", "Portugal"], ["STP", "Portugal"], ["COM", "France"], ["PNG", "Dominion of Australia"], ["OMN", "Oman"], ["MMR", "British Raj"]]) {
     assert.match(correction, new RegExp(`${code}: "${owner}"`), code);
   }
-  assert.doesNotMatch(correction, /BHR: /, "Bahrain is not a polity of the scenario: nothing is invented");
+  // Bahrain, absent from the scenario, is added like Danzig and Tangier: a new polity with its profile.
+  assert.match(correction, /BHR: "Bahrain",/);
+  assert.match(correction, /  Bahrain: \{\n    color: \[196, 60, 70\],\n    label: "Bahreïn",/);
+  assert.match(correction, /tags: \["british puppet"\],\n    flag: FLAGS_1936\.Bahrain,/);
+  assert.equal(CAPITALS_1936.Bahrain[0], "Manama");
   for (const place of ["Buea (Cameroun britannique)", "Aden (protectorat)", "Rangoun (Birmanie)", "Port Moresby (Papouasie)"]) assert.ok(correction.includes(`["${place}"`), place);
   assert.match(correction, /newOwners: NEW_OWNERS, capitals,/);
   const server = fs.readFileSync(path.join(here, "..", "..", "..", "server", "worldMap.js"), "utf8");
