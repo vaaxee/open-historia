@@ -7,6 +7,7 @@ import {
   NARRATION_PROMPT,
   NARRATION_SCHEMA,
   applyNarration,
+  belongsElsewhere,
   buildNarrationItems,
   describeAppliedImpacts,
   looksLikeRegionCode,
@@ -94,6 +95,27 @@ test("the narrator may not bring back a change of hands the engine took out", ()
   const changed = applyNarration(list, { events: [{ index: 0, title: "Chute de Kaunas", description: "Les Soviétiques prennent Kaunas et la Lituanie capitule." }] });
   assert.equal(changed, 0);
   assert.equal(list[0].title, "Tensions à la frontière lituanienne");
+});
+
+test("each rewrite stays with its own event: no crossed title and text, no other event's words, no other countries", () => {
+  const spies = () => [
+    { title: "Counter-intelligence uncovers a Denmark agent", description: "The security service has identified an agent working for Denmark.", impacts: {} },
+    { title: "Counter-intelligence uncovers a Hungary agent", description: "The security service has identified an agent working for Hungary.", impacts: {} },
+  ];
+  const crossed = spies();
+  assert.equal(applyNarration(crossed, { events: [
+    { index: 0, title: "The security service has identified an agent working for Denmark.", description: "Counter-intelligence uncovers a Denmark agent" },
+    { index: 1, title: "Hungarian spy caught", description: "An agent working for Hungary is in custody." },
+  ] }), 1, "the crossed one is refused, the honest one kept");
+  assert.equal(crossed[0].title, "Counter-intelligence uncovers a Denmark agent");
+  assert.equal(crossed[1].title, "Hungarian spy caught");
+  const borrowed = spies();
+  assert.equal(applyNarration(borrowed, { events: [
+    { index: 0, title: "Counter-intelligence uncovers a Hungary agent", description: "An agent working for Denmark is in custody." },
+    { index: 1, title: "Counter-intelligence uncovers a Hungary agent", description: "An agent working for Hungary is in custody." },
+  ] }), 1, "event 0 may not take event 1's title; event 1 keeps its own");
+  assert.ok(belongsElsewhere({ event: spies()[0], title: "Espionage", description: "An agent working for Hungary is caught.", events: spies() }), "Denmark's event told about Hungary");
+  assert.ok(!belongsElsewhere({ event: spies()[0], title: "Espionage", description: "A Danish agent is caught in Moscow.", events: spies() }));
 });
 
 test("the task is registered like every other: prompt, schema, tool, context profile, model pick", () => {

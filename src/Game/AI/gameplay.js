@@ -96,10 +96,11 @@ import {
   HOI_TECH_TREE_TOOL,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
-import { canonicalizePayloadPolityNames, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { canonicalizePayloadPolityNames, frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/worldmap/unitEntry.js";
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
-import { planPlayerWars } from "./playerWarOrders.js";
+import { insertEventAt, planPlayerWars } from "./playerWarOrders.js";
 import {
   VERDICT_INSTRUCTION,
   buildProposalThread,
@@ -120,7 +121,7 @@ import {
   warsFor,
 } from "../../runtime/worldmap/warRules.js";
 import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
-import { loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
+import { fixCapitalMisnaming, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
 import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -1967,7 +1968,8 @@ const buildPlacementGazetteer = (context, world) => {
     const ashore = nearestInteriorPoint(best.geometry, point);
     return ashore ? { point: ashore, region: asRegion(best) } : null;
   };
-  return { find, regionAt, nearestLand };
+  const geometryOf = (id) => withGeometry.find((row) => row.id === id)?.geometry ?? null;
+  return { find, regionAt, nearestLand, geometryOf };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2013,6 +2015,7 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 
   // What already stands, plus each thing placed by this payload as it lands.
   const standing = obstaclesOf(world);
+  const unitRegions = new Map();
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
@@ -2072,11 +2075,13 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       if (index >= 0) standing.splice(index, 1);
     }
     standing.push({ id: entry.id || `placed-${standing.length}`, lng: Number(target[lngKey]), lat: Number(target[latKey]), radiusKm });
+    // Where each unit ends up, for the entry rule (enforceUnitEntry below).
+    if (entry.family === "unit") unitRegions.set(target, gazetteer.regionAt([Number(target[lngKey]), Number(target[latKey])])?.id ?? "");
   }
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
   }
-  return { placed, spaced };
+  return { placed, spaced, unitRegions, gazetteer };
 };
 
 // The system prompt a task is sent: its template rendered with the variables,
@@ -5839,28 +5844,55 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
 // hundred region names on the one retry. By the next turn that vocabulary is a
 // lookup away, so the receipt only says what failed to land and why.
 
-// The player's declarations of war, into one answer (playerWarOrders.js): the
-// engine's event goes at the END of the answer's events, so the indexes other
-// records cite stay right, and its war record cites it.
+// The player's declarations of war, into one answer (playerWarOrders.js), each
+// with the engine's announcement in the game's language. A new war's event goes
+// at the END of the answer's events. A war the answer started from an event that
+// does not announce it (game F: an offensive) keeps its id but is moved onto the
+// announcement, which goes just before the first event of that war; every record
+// citing events by number is moved along (insertEventAt).
+const EVENT_INDEX_DECODERS = Object.freeze({
+  warUpdates: decodeWarUpdates,
+  storylineUpdates: decodeWorldStorylineUpdates,
+  relationUpdates: decodeRelationUpdates,
+  agreementUpdates: decodeAgreementUpdates,
+});
 const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) => {
   if (!candidate || !Array.isArray(candidate.events)) return;
   const player = normalizeString(bundle?.game?.country);
   if (!player) return;
-  const warUpdates = decodeWarUpdates(candidate.warUpdates);
+  const language = detectLanguage(candidate.events.map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
   const { started, refused } = planPlayerWars({
     actions: normalizeActions(bundle?.actions),
     world: normalizeWorldState(bundle?.world),
     player,
-    warUpdates,
+    warUpdates: decodeWarUpdates(candidate.warUpdates),
+    events: candidate.events,
     date,
+    language,
   });
-  for (const { action, target, war, event } of started) {
-    const index = candidate.events.length;
-    candidate.events.push({ ...event, id: `engine-war-${index + 1}` });
-    warUpdates.push({ ...war, eventIndexes: [index], eventIds: [`engine-war-${index + 1}`] });
-    noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target} and the answer carried no such war, so the engine started it (${war.id}). The two are at war: carry it forward.`);
+  for (const { action, target, war, event, existing } of started) {
+    const id = `engine-war-${candidate.events.length + 1}`;
+    if (!existing) {
+      const index = candidate.events.length;
+      candidate.events.push({ ...event, id });
+      candidate.warUpdates = [...decodeWarUpdates(candidate.warUpdates), { ...war, eventIndexes: [index], eventIds: [id] }];
+      noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target} and the answer carried no such war, so the engine started it (${war.id}) and announced it. The two are at war: carry it forward.`);
+      continue;
+    }
+    const tied = [
+      ...normalizeArray(existing.eventIndexes),
+      ...candidate.events.map((entry, index) => (normalizeString(entry?.warId) === war.id ? index : -1)),
+    ].filter((index) => Number.isInteger(index) && index >= 0 && index < candidate.events.length);
+    for (const index of normalizeArray(existing.eventIndexes)) {
+      const entry = candidate.events[index];
+      if (entry && typeof entry === "object" && !normalizeString(entry.warId)) entry.warId = war.id;
+    }
+    const at = insertEventAt(candidate, { ...event, id }, tied.length ? Math.min(...tied) : candidate.events.length, EVENT_INDEX_DECODERS);
+    candidate.warUpdates = candidate.warUpdates.map((record) => (record?.id === war.id && normalizeString(record?.op).toLowerCase() === "start"
+      ? { ...record, eventIndexes: [at], eventIds: [id] }
+      : record));
+    noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target}; the answer started that war (${war.id}) from an event that does not announce it, so the engine announced it first and tied the war to that announcement. The two are at war: carry it forward.`);
   }
-  if (started.length) candidate.warUpdates = warUpdates;
   for (const { action, reason } of refused) {
     noteReceipt(receipt, "dropped", `The player's order "${normalizeString(action?.title)}": ${reason}.`);
   }
@@ -5965,6 +5997,70 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
       keptTransfers.push(transfer);
     }
     if (Array.isArray(impacts.regionTransfers)) impacts.regionTransfers = keptTransfers;
+  }
+  return refused;
+};
+
+// Units on the world map enter a state held by someone outside their side only
+// from next door, by sea, or with a right of passage (runtime/worldmap/unitEntry.js).
+// After placement (resolvePlacements gives each unit's final region), in event
+// order, with the fronts as this answer's operations leave them. A refused
+// operation is taken out and returned ({ event, path, name, place, holder, raised, reason }).
+const enforceUnitEntry = (containers, candidate, world, { unitRegions = null, gazetteer = null } = {}) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!catalog.length || !unitRegions?.size || !gazetteer) return [];
+  const worldState = normalizeWorldState(world);
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  const controller = new Map(Object.entries(worldState.regionOwnershipOverrides ?? {}));
+  const coastal = new Map();
+  const isLand = (point) => Boolean(gazetteer.regionAt(point));
+  const map = {
+    controllerOf: (id) => normalizeString(controller.get(id)) || normalizeString(byId.get(id)?.country),
+    neighboursOf: (id) => normalizeArray(byId.get(id)?.adjacencies),
+    nameOf: (id) => normalizeString(byId.get(id)?.name) || id,
+    isCoastal: (id) => {
+      if (!coastal.has(id)) coastal.set(id, touchesSea(gazetteer.geometryOf(id), isLand));
+      return coastal.get(id);
+    },
+  };
+  const wars = warsFor(worldState, decodeWarUpdates(candidate?.warUpdates));
+  const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
+  const units = new Map(normalizeArray(worldState.units).map((unit) => [normalizeString(unit?.id), unit]));
+  const refused = [];
+  for (const { event, impacts, path } of containers) {
+    if (!impacts || typeof impacts !== "object") continue;
+    // The event's own conquests count before its units move (the front rules passed them).
+    for (const op of normalizeArray(impacts.regionControlOps)) {
+      if (normalizeString(op?.op).toLowerCase() === "control" && normalizeString(op?.regionId)) controller.set(normalizeString(op.regionId), normalizeString(op.toCode));
+    }
+    for (const transfer of normalizeArray(impacts.regionTransfers)) {
+      if (normalizeString(transfer?.regionId)) controller.set(normalizeString(transfer.regionId), normalizeString(transfer.toCode));
+    }
+    if (!Array.isArray(impacts.unitOps)) continue;
+    const kept = [];
+    for (const op of impacts.unitOps) {
+      const kind = normalizeString(op?.op).toLowerCase();
+      if (kind !== "spawn" && kind !== "move") { kept.push(op); continue; }
+      const raised = kind === "spawn";
+      const unit = raised ? (op.unit && typeof op.unit === "object" ? op.unit : op) : units.get(normalizeString(op?.unitId));
+      const regionId = unitRegions.get(raised ? unit : op) ?? "";
+      const owner = normalizeString(unit?.ownerCode ?? op?.ownerCode);
+      let from = null;
+      if (!raised) {
+        const lng = Number(unit?.lng); const lat = Number(unit?.lat);
+        const standing = Number.isFinite(lng) && Number.isFinite(lat) ? gazetteer.regionAt([lng, lat]) : null;
+        from = { regionId: standing?.id ?? normalizeString(unit?.regionId), atSea: Boolean(unit) && !standing && !normalizeString(unit?.regionId) };
+      }
+      const reason = checkUnitEntry({ owner, regionId, from, wars, map, world: worldState, agreementUpdates });
+      if (reason) {
+        refused.push({ event, path, name: normalizeString(unit?.name) || normalizeString(op?.unitId), place: map.nameOf(regionId), holder: map.controllerOf(regionId), raised, reason });
+        continue;
+      }
+      // A unit that moved stands in its new state for the next events.
+      if (!raised && unit) units.set(normalizeString(op.unitId), { ...unit, lng: op.toLng, lat: op.toLat, regionId });
+      kept.push(op);
+    }
+    impacts.unitOps = kept;
   }
   return refused;
 };
@@ -6129,7 +6225,25 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // that cannot be found is said in the receipt, and the operation keeps any
   // coordinates it came with. Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
-  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt });
+  const placement = resolvedRegionIdsOnly ? null : await resolvePlacements(containers, world, { receipt });
+  // Units follow the front's neighbourhood rule on the world map (unitEntry.js):
+  // a unit raised or moved out of reach is taken out, and its event says so.
+  if (warRules && captureGuard && placement && Array.isArray(candidate?.events)) {
+    const unitRefused = enforceUnitEntry(containers, candidate, world, placement);
+    if (strict && unitRefused.length) {
+      return unitRefused.slice(0, 4)
+        .map((entry) => `${entry.path}.unitOps: ${entry.name || "a unit"} was refused — ${entry.reason}.`)
+        .join("\n");
+    }
+    for (const entry of unitRefused) {
+      noteReceipt(receipt, "dropped", `${titleAt(entry.path) ? `Event "${titleAt(entry.path)}": ` : ""}${entry.reason}. The unit did NOT go there (a war rule of this map).`);
+      const event = entry.event;
+      if (!event || typeof event !== "object") continue;
+      const language = detectLanguage(`${event.title ?? ""} ${event.description ?? ""}`) === "fr" ? "fr" : "en";
+      const holder = language === "fr" ? frenchPolityName(entry.holder) : entry.holder;
+      event.description = `${normalizeString(event.description)} ${unitEntrySentence({ ...entry, holder }, language)}`.trim();
+    }
+  }
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
@@ -12335,6 +12449,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // No region code ever reaches the page (validatedNarration.js scrubRegionCodes).
       const nameOfRegion = regionNameLookup();
       for (const event of normalizeArray(payload?.events)) scrubRegionCodes(event, { nameOf: nameOfRegion });
+      // A capital is never "the second city" (runtime/worldmap/capitals.js).
+      const capitals = (await isWorldMapGame()) ? await loadWorldMapCapitals().catch(() => ({})) : {};
+      if (Object.keys(capitals).length) {
+        for (const event of normalizeArray(payload?.events)) {
+          if (!event || typeof event !== "object") continue;
+          event.title = fixCapitalMisnaming(event.title, capitals);
+          event.description = fixCapitalMisnaming(event.description, capitals);
+        }
+      }
 
       screenSegmentPayload(payload, {
         analysis: worldInitiative.analysis,

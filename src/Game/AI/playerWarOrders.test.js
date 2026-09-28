@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { declaresWar, planPlayerWars, warOrderTarget } from "./playerWarOrders.js";
+import { declaresWar, insertEventAt, planPlayerWars, warOrderTarget } from "./playerWarOrders.js";
+import { eventDeclaresWar, eventNarratesHardCombat, validateCanonicalWarEvents } from "./nativeWarLedger.js";
 
 const world = {
   polityOverrides: {
@@ -43,15 +44,27 @@ test("the war the player ordered is started by the engine, tied to the order", (
   assert.equal(target, "Lithuania");
   assert.deepEqual(war, { id: "war-soviet-union-lithuania-1936-01-02", op: "start", actors: ["Soviet Union"], opponents: ["Lithuania"], eventIndexes: [], eventIds: [], note: "Soviet Union declared war on Lithuania" });
   assert.equal(event.title, "Soviet Union declares war on Lithuania");
+  assert.equal(event.warId, "war-soviet-union-lithuania-1936-01-02", "the announcement is bound to its war, or the ledger drops it");
   assert.deepEqual(event.impacts, { actionIds: ["a2"] });
   assert.equal(event.source, "engine");
 });
 
-test("no second war when the world or the answer already has it; an order naming nobody is refused aloud", () => {
+test("in a French game the engine announces the war in French", () => {
+  const { started } = planPlayerWars({ actions: orders(), world, player: "Soviet Union", date: "1936-01-09", language: "fr" });
+  assert.equal(started[0].event.title, "Déclaration de guerre : Union soviétique contre Lituanie");
+  assert.equal(started[0].event.description, "Sur ordre de son gouvernement, Union soviétique déclare la guerre à Lituanie. À partir d'aujourd'hui, les deux pays sont en guerre.");
+  assert.ok(eventDeclaresWar(started[0].event), "the ledger reads it as a declaration");
+});
+
+test("no second war when the world or an announcing event already has it; an order naming nobody is refused aloud", () => {
   const atWar = { ...world, wars: [{ id: "w", status: "active", sideA: ["Soviet Union"], sideB: ["Lithuania"] }] };
   assert.equal(planPlayerWars({ actions: orders(), world: atWar, player: "Soviet Union" }).started.length, 0);
-  const inAnswer = planPlayerWars({ actions: orders(), world, player: "Soviet Union", warUpdates: [{ op: "start", actors: ["Soviet Union"], opponents: ["Lithuania"] }] });
-  assert.equal(inAnswer.started.length, 0);
+  const announced = planPlayerWars({
+    actions: orders(), world, player: "Soviet Union",
+    warUpdates: [{ id: "w1", op: "start", actors: ["Soviet Union"], opponents: ["Lithuania"], eventIndexes: [0] }],
+    events: [{ title: "L'Union soviétique déclare la guerre à la Lituanie", description: "" }],
+  });
+  assert.equal(announced.started.length, 0);
   const vague = planPlayerWars({ actions: [{ id: "x", status: "planned", title: "Déclarer la guerre à l'Atlantide" }], world, player: "Soviet Union" });
   assert.equal(vague.started.length, 0);
   assert.match(vague.refused[0].reason, /names no polity on this map/);
@@ -66,8 +79,57 @@ test("the skip starts the player's wars before the war rules read the answer, on
   const verdicts = source.indexOf("enforceProposalVerdicts(candidate, context.proposalVerdicts ?? []", add);
   assert.ok(add > 0 && verdicts > add && validate > verdicts, "wars, then the proposals' verdicts, then the validation that reads both");
   const helper = source.slice(source.indexOf("const addPlayerWars = "), source.indexOf("const checkClaimsAgainstHolders = "));
-  assert.match(helper, /candidate\.events\.push\(\{ \.\.\.event, id: `engine-war-\$\{index \+ 1\}` \}\);/, "at the end, so cited indexes stay right");
+  assert.match(helper, /candidate\.events\.push\(\{ \.\.\.event, id \}\);/, "a new war: at the end, so cited indexes stay right");
+  assert.match(helper, /insertEventAt\(candidate, \{ \.\.\.event, id \}, tied\.length \? Math\.min\(\.\.\.tied\) : candidate\.events\.length, EVENT_INDEX_DECODERS\)/);
   assert.match(helper, /noteReceipt\(receipt, "dropped", `The player's order/);
+});
+
+// Test F, 8–15 January: the model started the war on its offensive towards Kaunas.
+const offensive = () => ({
+  events: [
+    { title: "Espagne : Tensions politiques", description: "Les partis s'affrontent avant les élections." },
+    {
+      title: "Lituanie : Offensive soviétique vers Kaunas",
+      description: "Les forces soviétiques lancent une offensive majeure vers Kaunas. Les combats se concentrent autour des régions frontalières.",
+      warId: "war-soviet-union-lithuania-1936",
+      combatants: ["Soviet Union", "Lithuania"],
+    },
+  ],
+  warUpdates: [{ id: "war-soviet-union-lithuania-1936", op: "start", actors: ["Soviet Union"], opponents: ["Lithuania"], eventIndexes: [1], eventIds: [], note: "" }],
+  storylineUpdates: [{ id: "s1", op: "update", eventIndexes: [0, 1] }],
+});
+
+test("a war the answer started from an offensive gets its announcement, placed first, and keeps its id", () => {
+  const candidate = offensive();
+  const { started } = planPlayerWars({ actions: orders(), world, player: "Soviet Union", warUpdates: candidate.warUpdates, events: candidate.events, date: "1936-01-09", language: "fr" });
+  assert.equal(started.length, 1);
+  assert.equal(started[0].existing.id, "war-soviet-union-lithuania-1936");
+  assert.equal(started[0].event.warId, "war-soviet-union-lithuania-1936");
+  const at = insertEventAt(candidate, started[0].event, 1, {
+    warUpdates: (value) => value,
+    storylineUpdates: (value) => value,
+  });
+  assert.equal(at, 1);
+  assert.equal(candidate.events[1].title, "Déclaration de guerre : Union soviétique contre Lituanie");
+  assert.deepEqual(candidate.warUpdates[0].eventIndexes, [2], "the offensive moved one down, and its record with it");
+  assert.deepEqual(candidate.storylineUpdates[0].eventIndexes, [0, 2]);
+});
+
+test("the ledger reads a French declaration and a French offensive, and not a diplomatic one", () => {
+  assert.ok(eventDeclaresWar({ title: "Déclaration de guerre : Union soviétique contre Lituanie" }));
+  assert.ok(eventDeclaresWar({ title: "L'URSS déclare la guerre à la Lituanie" }));
+  assert.ok(!eventDeclaresWar({ title: "Lituanie : Offensive soviétique vers Kaunas" }));
+  assert.ok(eventNarratesHardCombat(offensive().events[1]));
+  assert.ok(!eventNarratesHardCombat({ title: "La France lance une offensive diplomatique", description: "Paris multiplie les démarches." }));
+});
+
+test("the whole of test F's answer now passes the war ledger", () => {
+  const candidate = offensive();
+  const { started } = planPlayerWars({ actions: orders(), world, player: "Soviet Union", warUpdates: candidate.warUpdates, events: candidate.events, date: "1936-01-09", language: "fr" });
+  const at = insertEventAt(candidate, { ...started[0].event, id: "engine-war-3" }, 1, { warUpdates: (value) => value });
+  candidate.warUpdates = candidate.warUpdates.map((record) => ({ ...record, eventIndexes: [at], eventIds: ["engine-war-3"] }));
+  candidate.events = candidate.events.map((event, index) => ({ id: event.id ?? `e${index}`, date: "1936-01-09", ...event }));
+  assert.equal(validateCanonicalWarEvents({ events: candidate.events, updates: candidate.warUpdates, world: { wars: [] } }), "");
 });
 
 test("the narrator is told only territorial refusals, and no region code reaches the page", () => {

@@ -334,10 +334,18 @@ const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|sh
 // Bare "combat" is intentionally NOT sufficient: in military prose it is often
 // adjectival ("combat battlegroup", "combat-ready", "combat capability") rather
 // than evidence that two polities are fighting one another.
-const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
+// The same evidence in French (the field report, game F: "Les forces soviétiques
+// lancent une offensive majeure vers Kaunas … Les combats se concentrent" was not
+// read as combat, so the war the model started from it was dropped, and a game
+// played in French could never start a war from its own story).
+const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|fighting|firefight|artillery fire|air strike|airstrike|ground fighting|bataille|combats|bombardements?|envahi(?:t|ssent|ssement)?|affrontements?)\b/i;
 const DIRECT_COMBAT_CONTEXT_RE = /\b(?:engag(?:e|es|ed|ing)|locked)\b.{0,80}\bcombat\b|\bcombat\b.{0,80}\b(?:against|between|with)\b|\bcombat operations?\b.{0,80}\b(?:against|targeting)\b/i;
-const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b/i;
-const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities)\b/i;
+const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b|\b(?:lance|d[ée]clenche|entame)(?:nt)?\b.{0,60}\b(?:contre-)?offensive\b/i;
+const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities|d[ée]clar\w*\s+(?:la\s+)?guerre|d[ée]claration de guerre|entre(?:nt)? en guerre|kriegserkl[äa]rung|declara\w*\s+(?:la\s+)?guerra|dichiara\w*\s+(?:la\s+)?guerra)\b/i;
+
+// Does the event itself announce a war (a declaration, an entry into the war)?
+export const eventDeclaresWar = (event) =>
+  WAR_START_RE.test(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`);
 const CEASEFIRE_RE = /\b(ceasefire (?:takes effect|begins|signed|agreed|declared)|armistice (?:takes effect|signed|agreed)|truce (?:takes effect|signed|agreed))\b/i;
 const WAR_END_RE = /\b(peace treaty (?:signed|takes effect)|war ends|ends? the war|hostilities formally end|peace is signed)\b/i;
 
@@ -390,7 +398,7 @@ const NON_BATTLEFIELD_ACTION_TERMS_RE = new RegExp(
 // the battlefield terms, which this leaves untouched. "Cyber" is deliberately
 // not on the list: a cyber offensive is a hostile act, not a figure of speech.
 const NON_BATTLEFIELD_OFFENSIVE_RE =
-  /\b(?:diplomatic|charm|peace|political|media|public[- ]relations|propaganda|information|legal|lobbying|economic|trade|investment|marketing|publicity|messaging)\s+(?:counter[- ]?)?offensives?\b/gi;
+  /\b(?:diplomatic|charm|peace|political|media|public[- ]relations|propaganda|information|legal|lobbying|economic|trade|investment|marketing|publicity|messaging)\s+(?:counter[- ]?)?offensives?\b|\boffensives?\s+(?:diplomatique|de charme|de paix|politique|m[ée]diatique|de propagande|commerciale|[ée]conomique|juridique)s?\b/gi;
 
 const combatSemanticText = (event) =>
   `${normalizeString(event?.title)} ${normalizeString(event?.description)}`

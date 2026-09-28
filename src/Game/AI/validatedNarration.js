@@ -15,6 +15,7 @@
 // budget has no room, the guard alone holds.
 
 import { assertsCapitulation, assertsChangeOfHands, detectLanguage } from "./claimGuard.js";
+import { countriesNamed } from "../../runtime/translationCheck.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
@@ -114,6 +115,25 @@ export const validateNarration = (payload, count) => {
 // its applied changes do not carry, when its text did not before, is refused:
 // the narrator may not bring back what the engine took out.
 // Returns how many events changed.
+const same = (a, b) => {
+  const fold = (value) => clean(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const x = fold(a); const y = fold(b);
+  return Boolean(x) && Boolean(y) && (x === y || (x.length >= 30 && y.length >= 30 && x.slice(0, 30) === y.slice(0, 30)));
+};
+
+// Is a rewrite the story of something else? (Game F's spy events came out with
+// title and text crossed and another event's words — a translation fault, as it
+// turned out, but the narrator is held to the same rule.)
+export const belongsElsewhere = ({ event, title, description, events = [] }) => {
+  if (same(title, event.description) || same(description, event.title)) return true;
+  const others = list(events).filter((other) => other && other !== event);
+  if (others.some((other) => (same(title, other.title) && !same(title, event.title))
+    || (same(description, other.description) && !same(description, event.description)))) return true;
+  const was = countriesNamed(`${event.title ?? ""}. ${event.description ?? ""}`);
+  const now = countriesNamed(`${title}. ${description}`);
+  return was.size > 0 && now.size > 0 && ![...was].some((name) => now.has(name));
+};
+
 export const applyNarration = (events, payload) => {
   const rows = list(payload?.events);
   let changed = 0;
@@ -128,6 +148,9 @@ export const applyNarration = (events, payload) => {
     const after = `${title}. ${description}`;
     if (!territorial && ((assertsChangeOfHands(after) && !assertsChangeOfHands(before))
       || (assertsCapitulation(after) && !assertsCapitulation(before)))) continue;
+    // Each rewrite stays with its own event: none that swaps title and text, takes
+    // another event's words, or leaves every country the event was about.
+    if (belongsElsewhere({ event, title, description, events })) continue;
     event.narratedFrom = event.narratedFrom ?? { title: event.title ?? "", description: event.description ?? "" };
     event.title = title;
     event.description = description;

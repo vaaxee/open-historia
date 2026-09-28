@@ -9,7 +9,15 @@
 // tied to the order. An order that declares war on nobody the map knows is
 // refused with its reason in the receipt.
 
-import { mentionedPolities } from "../../runtime/polityExonyms.js";
+// Game F, second week: the model did start the war — on its offensive towards
+// Kaunas, an event that never says war was declared — so no event announced it
+// (and the ledger, reading only English, then dropped it). The player's
+// declaration is an act of its own: the engine now always tells it, in the
+// game's language, and a war the answer started from some other event is moved
+// onto that announcement, which comes first.
+
+import { frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { eventDeclaresWar } from "./nativeWarLedger.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -38,15 +46,43 @@ const atWarWith = (wars, a, b) => list(wars).some((war) => {
 
 const slug = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
+const DECLARATION_WORDING = {
+  en: (player, target) => ({
+    title: `${player} declares war on ${target}`,
+    description: `By order of its government, ${player} declares war on ${target}. From today the two are at war.`,
+  }),
+  fr: (player, target) => ({
+    title: `Déclaration de guerre : ${frenchPolityName(player)} contre ${frenchPolityName(target)}`,
+    description: `Sur ordre de son gouvernement, ${frenchPolityName(player)} déclare la guerre à ${frenchPolityName(target)}. À partir d'aujourd'hui, les deux pays sont en guerre.`,
+  }),
+};
+
+// The engine's announcement of the player's war, in `language` (fr or en).
+export const declarationEvent = ({ player, target, date = "", language = "en", actionId = "", warId = "" }) => ({
+  date,
+  ...(DECLARATION_WORDING[language] ?? DECLARATION_WORDING.en)(player, target),
+  kind: "military",
+  importance: "major",
+  notable: true,
+  playerRelated: true,
+  source: "engine",
+  ...(warId ? { warId } : {}),
+  impacts: { actionIds: [clean(actionId)].filter(Boolean) },
+});
+
+const startsBetween = (record, a, b) => clean(record?.op).toLowerCase() === "start"
+  && atWarWith([{ sideA: record.actors, sideB: record.opponents }], a, b);
+
 // For each planned order that declares war: the war the engine must start
 // ({ action, target, war, event }) or the refusal ({ action, reason }).
-// `warUpdates` are this answer's war records (decoded objects).
-export const planPlayerWars = ({ actions, world, player, warUpdates = [], date = "" }) => {
+// `warUpdates` are this answer's war records (decoded objects), `events` its
+// events. When the answer already starts that war but none of the events it is
+// tied to announces it, the entry carries `existing` (the answer's record, whose
+// id the announcement takes) instead of a new war.
+export const planPlayerWars = ({ actions, world, player, warUpdates = [], events = [], date = "", language = "en" }) => {
   const started = [];
   const refused = [];
-  const answerWars = list(warUpdates)
-    .filter((record) => clean(record?.op).toLowerCase() === "start")
-    .map((record) => ({ status: "active", sideA: record.actors, sideB: record.opponents }));
+  const planned = [];
   for (const action of list(actions)) {
     if (clean(action?.status || "planned") !== "planned") continue;
     const text = `${clean(action?.title)} ${clean(action?.text ?? action?.rawInput)}`;
@@ -56,26 +92,36 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], date =
       refused.push({ action, reason: "the order declares war but names no polity on this map (or several, with none first): no war was started" });
       continue;
     }
-    if (atWarWith(world?.wars, player, target) || atWarWith(answerWars, player, target)) continue;
-    const id = `war-${slug(player)}-${slug(target)}-${slug(date) || "start"}`;
-    const event = {
-      date,
-      title: `${player} declares war on ${target}`,
-      description: `By order of its government, ${player} declares war on ${target}. From today the two are at war.`,
-      kind: "military",
-      importance: "major",
-      notable: true,
-      playerRelated: true,
-      source: "engine",
-      impacts: { actionIds: [clean(action?.id)].filter(Boolean) },
-    };
+    if (atWarWith(world?.wars, player, target) || planned.some((other) => key(other) === key(target))) continue;
+    planned.push(target);
+    const existing = list(warUpdates).find((record) => startsBetween(record, player, target)) ?? null;
+    if (existing && list(existing.eventIndexes).some((index) => eventDeclaresWar(list(events)[index]))) continue;
+    const id = clean(existing?.id) || `war-${slug(player)}-${slug(target)}-${slug(date) || "start"}`;
     started.push({
       action,
       target,
-      war: { id, op: "start", actors: [player], opponents: [target], eventIndexes: [], eventIds: [], note: `${player} declared war on ${target}` },
-      event,
+      existing,
+      war: existing
+        ? { ...existing, eventIndexes: [], eventIds: [] }
+        : { id, op: "start", actors: [player], opponents: [target], eventIndexes: [], eventIds: [], note: `${player} declared war on ${target}` },
+      event: declarationEvent({ player, target, date, language, actionId: action?.id, warId: id }),
     });
-    answerWars.push({ status: "active", sideA: [player], sideB: [target] });
   }
   return { started, refused };
+};
+
+// Puts `event` at `position` in the answer and moves every record that points at
+// an event by its number (war, storyline, relation and agreement records, as
+// decoded objects) so each still points at the same event.
+export const insertEventAt = (candidate, event, position, decoders = {}) => {
+  const events = candidate.events;
+  const at = Math.max(0, Math.min(Number.isInteger(position) ? position : events.length, events.length));
+  events.splice(at, 0, event);
+  for (const [field, decode] of Object.entries(decoders)) {
+    if (candidate[field] == null || candidate[field] === "") continue;
+    candidate[field] = decode(candidate[field]).map((record) => (Array.isArray(record?.eventIndexes)
+      ? { ...record, eventIndexes: record.eventIndexes.map((index) => (index >= at ? index + 1 : index)) }
+      : record));
+  }
+  return at;
 };

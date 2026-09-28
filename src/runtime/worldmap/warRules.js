@@ -266,6 +266,7 @@ export const describeWarRules = (world) => {
   const lines = [
     "- A state is taken by force (regionControlOps control or contest) only in a DECLARED, active war between the attacker and the state's controller: start the war first with warUpdates.",
     `- Occupation moves state by state: the target must border a state the attacker or its co-belligerents hold, or have one of their units in or next to it; a front takes at most ${OCCUPATIONS_PER_WEEK} states a week. Occupation changes the controller, never the legal owner.`,
+    "- Units follow the same neighbourhood: a unit is raised or moved into a state held by someone outside its side only if that state borders a state its side holds, or it lands from the sea on a coast, or the holder granted a right of passage (agreement military_access or alliance). A polity with no border cannot put troops next to a foreign city.",
     "- Capitulation is declared by the ENGINE, never by the story: a polity whose capital an enemy holds and that has lost a third of its states capitulates on its own. Do not write a surrender or capitulation.",
     "- Legal sovereignty (regionTransfers) changes only by a treaty between the two (agreementUpdates start of type peace_settlement or other, both as parties), or after the loser's capitulation for a state the winning side holds.",
   ];

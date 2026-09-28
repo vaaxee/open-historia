@@ -21,6 +21,7 @@ import {
   languageDisplayName,
   syncLanguageFromServer,
 } from "./i18n.js";
+import { misalignedReason, textLanguage } from "./translationCheck.js";
 
 const CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
@@ -102,7 +103,10 @@ const announceUpdate = () => {
 const loadCache = () => {
   try {
     const raw = localStorage.getItem(cacheKey());
-    cache = new Map(Object.entries(raw ? JSON.parse(raw) : {}));
+    // A translation that belongs to another string (translationCheck.js) is
+    // dropped, and so translated again when it is next shown.
+    cache = new Map(Object.entries(raw ? JSON.parse(raw) : {})
+      .filter(([source, translated]) => !misalignedReason(source, translated, language)));
   } catch {
     cache = new Map();
   }
@@ -342,9 +346,21 @@ const translateBatch = async (strings) => {
   if (!translations) {
     throw new Error("translation response was not a JSON array");
   }
+  // One string short and every translation after the gap belongs to the next
+  // string: game F showed a Hungarian agent under a Danish title, and game E's
+  // "Lituanie : Tentative d'annexion pacifique" as the text of a spy event —
+  // saved to the shared language pack for every game. An answer of the wrong
+  // length is not used at all; the batch is retried smaller.
+  if (!translationsAligned(strings, translations)) {
+    throw new Error(`translation response had ${translations.length} strings for ${strings.length}`);
+  }
 
   return translations;
 };
+
+// Is an answer usable as is: one string per source string, in order? Pure, for the tests.
+export const translationsAligned = (strings, translations) =>
+  Array.isArray(strings) && Array.isArray(translations) && translations.length === strings.length;
 
 // The next request's worth of strings: as many as fit under both ceilings, and
 // always at least one however long that one string is. Pure, so the sizing can
@@ -375,6 +391,14 @@ const processQueue = async () => {
 
   inFlight = true;
   try {
+    // Text already in the player's language (their own orders, French stories)
+    // is kept as written: sent to be "translated", it came back reworded.
+    for (const source of [...pending]) {
+      if (textLanguage(source) === language) {
+        cache.set(source, source);
+        pending.delete(source);
+      }
+    }
     while (pending.size > 0 && !stopped && Date.now() >= cooldownUntil) {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
@@ -397,9 +421,12 @@ const processQueue = async () => {
           continue;
         }
         result.batch.forEach((source, index) => {
-          const translated = typeof result.translations[index] === "string"
+          const answered = typeof result.translations[index] === "string"
             ? result.translations[index].trim()
             : "";
+          // One that fails the check keeps its source text, so it is neither
+          // shown wrong nor asked for again on every start (translationCheck.js).
+          const translated = answered && !misalignedReason(source, answered, language) ? answered : "";
           cache.set(source, translated || source);
           unsyncedEntries[source] = translated || source;
           pending.delete(source);
@@ -598,7 +625,8 @@ const loadServerPack = async () => {
     if (!response.ok) return;
     const pack = await response.json();
     for (const [source, translated] of Object.entries(pack ?? {})) {
-      if (typeof source === "string" && typeof translated === "string" && !cache.has(source)) {
+      if (typeof source === "string" && typeof translated === "string" && !cache.has(source)
+        && !misalignedReason(source, translated, language)) {
         cache.set(source, translated);
       }
     }

@@ -40,3 +40,31 @@ export const describeCapitals = (capitals, ownerOf = () => "") => {
     return `- ${polity}: ${entry.city}${region}${held}`;
   }).join("\n");
 };
+
+// Test F, 8–15 janvier 1936 : « Kaunas, la deuxième ville la plus importante de
+// Lituanie », alors que Kaunas était la capitale et que le prompt le disait. Une
+// capitale décrite comme la deuxième (troisième…) ville devient « la capitale ».
+const ORDINAL_CITY = /(?:la |the )?(?:deuxi[èe]me|seconde|troisi[èe]me|second|third)(?:[- ]largest)? (?:ville|city)(?: la plus importante)?/i;
+export const fixCapitalMisnaming = (text, capitals) => {
+  let out = String(text ?? "");
+  for (const entry of Object.values(capitals ?? {})) {
+    const city = String(entry?.city ?? "").trim();
+    if (!city) continue;
+    let from = 0;
+    for (;;) {
+      const at = out.indexOf(city, from);
+      if (at < 0) break;
+      const after = at + city.length;
+      const window = out.slice(after, after + 40);
+      const match = window.match(ORDINAL_CITY);
+      // Right after the name (", la deuxième ville…", " is the second city…").
+      if (match && /^[\s,]*(?:(?:est|is|was|[ée]tait)\s+)?$/i.test(window.slice(0, match.index))) {
+        const french = /ville/i.test(match[0]);
+        const start = after + match.index;
+        out = `${out.slice(0, start)}${french ? "la capitale" : "the capital"}${out.slice(start + match[0].length)}`;
+      }
+      from = after;
+    }
+  }
+  return out;
+};

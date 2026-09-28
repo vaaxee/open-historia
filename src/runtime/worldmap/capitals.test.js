@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { describeCapitals, loadWorldMapCapitals } from "./capitals.js";
+import { describeCapitals, fixCapitalMisnaming, loadWorldMapCapitals } from "./capitals.js";
 import { buildRegionOwnershipText } from "../../Game/AI/regionVocab.js";
 import { CAPITALS_1936 } from "../../../scripts/worldmap/capitals-1936.mjs";
 import { PERIOD_ALIASES_1936 } from "../../../scripts/worldmap/aliases-1936.mjs";
@@ -47,6 +47,19 @@ test("the region list the AI reads shows a region's period names", () => {
   );
   assert.match(text, /Vilnius \[also Wilno \/ Vilna\] \(imp-rgb-0066DD\)/);
   assert.match(text, /Kaunas \(imp-rgb-BB33CC\)/);
+});
+
+test("a capital is never told as the second city (test F: Kaunas)", () => {
+  const capitals = { Lithuania: { city: "Kaunas" }, "United Kingdom": { city: "London" } };
+  assert.equal(
+    fixCapitalMisnaming("Les forces soviétiques lancent une offensive majeure vers Kaunas, la deuxième ville la plus importante de Lituanie.", capitals),
+    "Les forces soviétiques lancent une offensive majeure vers Kaunas, la capitale de Lituanie.",
+  );
+  assert.equal(fixCapitalMisnaming("Kaunas is the second-largest city of Lithuania.", capitals), "Kaunas is the capital of Lithuania.");
+  assert.equal(fixCapitalMisnaming("Vilnius, la deuxième ville de Pologne", capitals), "Vilnius, la deuxième ville de Pologne", "not a capital: unchanged");
+  assert.equal(fixCapitalMisnaming("De Kaunas à Memel, la deuxième ville est Memel", capitals), "De Kaunas à Memel, la deuxième ville est Memel", "the ordinal must follow the name");
+  const source = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
+  assert.match(source, /event\.description = fixCapitalMisnaming\(event\.description, capitals\);/);
 });
 
 test("without a server (a game off the world map, or the tests) there are no capitals", async () => {

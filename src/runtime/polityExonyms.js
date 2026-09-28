@@ -20,8 +20,7 @@ import { ownerIdentityKey, toCountryName } from "./ownerNames.js";
 
 // Folded exonym → English name. Folding is ownerIdentityKey (case, accents and
 // punctuation dropped), so "Royaume-Uni", "royaume uni" and "ROYAUME UNI" are one key.
-const EXONYM_ROWS = [
-  // French
+const FRENCH_ROWS = [
   ["Allemagne", "Germany"], ["Reich allemand", "Germany"], ["Troisième Reich", "Germany"], ["Autriche", "Austria"],
   ["Royaume-Uni", "United Kingdom"], ["Grande-Bretagne", "United Kingdom"], ["Angleterre", "United Kingdom"],
   ["États-Unis", "United States"], ["États-Unis d'Amérique", "United States"], ["Amérique", "United States"],
@@ -43,6 +42,11 @@ const EXONYM_ROWS = [
   ["Australie", "Australia"], ["Nouvelle-Zélande", "New Zealand"], ["Thaïlande", "Thailand"], ["Siam", "Thailand"],
   ["Afghanistan", "Afghanistan"], ["Népal", "Nepal"], ["Tibet", "Tibet"], ["Corée", "Korea"], ["Philippines", "Philippines"],
   ["Indes néerlandaises", "Dutch East Indies"], ["Touva", "Tannu Tuva"], ["Tannou-Touva", "Tannu Tuva"],
+  ["France", "France"], ["Bahreïn", "Bahrain"],
+];
+
+const EXONYM_ROWS = [
+  ...FRENCH_ROWS,
   // German
   ["Deutschland", "Germany"], ["Deutsches Reich", "Germany"], ["Österreich", "Austria"], ["Großbritannien", "United Kingdom"],
   ["Vereinigtes Königreich", "United Kingdom"], ["Vereinigte Staaten", "United States"], ["Sowjetunion", "Soviet Union"],
@@ -76,6 +80,12 @@ const EXONYM_ROWS = [
 export const EXONYMS = Object.freeze(Object.fromEntries(
   EXONYM_ROWS.map(([foreign, english]) => [ownerIdentityKey(foreign), english]),
 ));
+
+// The usual French name of a map polity (the first French row for it), for the
+// engine's own sentences in a French game; the map's name when there is none.
+const FRENCH_NAMES = new Map();
+for (const [french, english] of FRENCH_ROWS) if (!FRENCH_NAMES.has(english)) FRENCH_NAMES.set(english, french);
+export const frenchPolityName = (name) => FRENCH_NAMES.get(String(name ?? "").trim()) ?? String(name ?? "").trim();
 
 // Every polity a text names, as the map's exact names: its key, display name,
 // aliases, and every foreign name of it above ("Lituanie", "Royaume-Uni").
