@@ -43,6 +43,9 @@ export const MAP_LAYER_ORDER = [
   "worldmap-occupation",
   "worldmap-province-lines",
   "worldmap-country-borders",
+  // Phase 7.6 : les fronts (traits et flèches), sur les frontières.
+  "worldmap-fronts",
+  "worldmap-front-arrows",
 
   // Draped standing-order lines belong above map cartography but below symbols.
   "units-heading",
@@ -68,6 +71,11 @@ export const MAP_LAYER_ORDER = [
   "markers-labels-regional",
   "markers-shapes-local",
   "markers-labels-local",
+
+  // Phase 7.6 : les batailles du dernier tour et les pions des armées.
+  "worldmap-battles",
+  "worldmap-armies",
+  "worldmap-armies-count",
 
   // Unit counters are interactive operational objects and remain topmost.
   "units-fill",

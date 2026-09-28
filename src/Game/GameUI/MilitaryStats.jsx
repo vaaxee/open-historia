@@ -1,0 +1,71 @@
+// Phase 7.6 — le sous-onglet militaire des Statistiques (militaryStats.js).
+import React from "react";
+import { militaryStats } from "./militaryStats.js";
+import { RESULT_LABELS } from "./battleSheet.js";
+
+const box = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", marginTop: "0.8rem", padding: "0.65rem 0.8rem" };
+const heading = { color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", marginBottom: "0.4rem", textTransform: "uppercase" };
+const row = { display: "flex", fontSize: "0.78rem", gap: "0.6rem", justifyContent: "space-between", lineHeight: 1.55 };
+const num = (value) => Math.round(Number(value) || 0).toLocaleString();
+
+const MilitaryStats = ({ world, targetCountry }) => {
+    const stats = militaryStats(world, targetCountry);
+    if (!stats) {
+        return <p style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.76rem", marginTop: "1rem" }}>This country has no army tracked by the engine.</p>;
+    }
+    const produced = Object.entries(stats.produced).filter(([, count]) => count > 0);
+    const reserve = Object.entries(stats.stockpile).filter(([, count]) => count > 0);
+    return (
+        <div>
+            <div style={box}>
+                <div style={heading}>Armed forces</div>
+                <div style={row}><span>Divisions and wings</span><span data-no-translate="">{stats.totalDivisions}</span></div>
+                <div style={row}><span>Men under arms</span><span data-no-translate="">{num(stats.men)}</span></div>
+                <div style={row}><span>Manpower available</span><span data-no-translate="">{num(stats.manpower)}</span></div>
+                {stats.divisions.map((group) => (
+                    <div key={group.template} style={row}>
+                        <span>{group.label}</span>
+                        <span data-no-translate="">{group.count} · {Math.round(group.strength * 100)}% · org {group.organisation}</span>
+                    </div>
+                ))}
+            </div>
+            <div style={box}>
+                <div style={heading}>Supply</div>
+                <div style={row}><span>Encircled divisions</span><span data-no-translate="">{stats.supply.encircled}</span></div>
+                <div style={row}><span>Poorly supplied divisions</span><span data-no-translate="">{stats.supply.poorlySupplied}</span></div>
+                {stats.supply.needed !== null && (
+                    <div style={row}><span>Supplies used / needed (last turn)</span><span data-no-translate="">{num(stats.supply.consumed)} / {num(stats.supply.needed)}</span></div>
+                )}
+            </div>
+            <div style={box}>
+                <div style={heading}>Production (last turn) and reserve</div>
+                {produced.length === 0 && <div style={row}><span>No output recorded yet</span></div>}
+                {produced.map(([item, count]) => <div key={`p-${item}`} style={row}><span>{item}</span><span data-no-translate="">+{num(count)}</span></div>)}
+                {reserve.map(([item, count]) => <div key={`r-${item}`} style={{ ...row, color: "rgba(255,255,255,0.6)" }}><span>{item} in reserve</span><span data-no-translate="">{num(count)}</span></div>)}
+            </div>
+            <div style={box}>
+                <div style={heading}>Fronts</div>
+                {stats.fronts.length === 0 && <div style={row}><span>No front</span></div>}
+                {stats.fronts.map((front) => (
+                    <div key={front.id} style={row}>
+                        <span data-no-translate="">{front.owner} → {front.enemy}</span>
+                        <span>{front.posture} · {front.divisionIds.length}</span>
+                    </div>
+                ))}
+            </div>
+            <div style={box}>
+                <div style={heading}>Recent battles</div>
+                {stats.battles.length === 0 && <div style={row}><span>No battle yet</span></div>}
+                {stats.battles.map((battle) => (
+                    <div key={battle.id} style={row}>
+                        <span data-no-translate="">{battle.date} · {battle.stateName}</span>
+                        <span>{RESULT_LABELS[battle.result] ?? battle.result}</span>
+                    </div>
+                ))}
+                {stats.lostInBattle > 0 && <div style={{ ...row, color: "#fca5a5" }}><span>Men lost in these battles</span><span data-no-translate="">{num(stats.lostInBattle)}</span></div>}
+            </div>
+        </div>
+    );
+};
+
+export default MilitaryStats;

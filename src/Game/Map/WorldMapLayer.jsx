@@ -26,6 +26,7 @@ import {
   BORDER_KIND, arcKind, changedProvinces, provinceOwners, todayColour,
 } from "../../runtime/worldmap/borders.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
+import ArmiesLayer from "./ArmiesLayer.jsx";
 import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 
 export { worldMapPreviewMode };
@@ -220,6 +221,8 @@ const WorldMapLayer = () => {
     <Source id="worldmap-occupation-source" type="geojson" data={occupation}>
       <Layer id="worldmap-occupation" type="fill" paint={{ "fill-pattern": ["get", "pattern"], "fill-antialias": false }} />
     </Source>
+    {/* Phase 7.6 : armées, fronts et batailles (ArmiesLayer.jsx), dans une partie qui en a. */}
+    {data.useOverrides ? <ArmiesLayer stateOwners={data.scenario?.stateOwners ?? {}} colourOf={data.colourOf} /> : null}
     </>
   );
 };

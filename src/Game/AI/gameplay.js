@@ -7458,6 +7458,8 @@ const applySimulationResult = async ({
         armies: combat ? applyCombatOutcome(impactedWorld.hoi.armies, combat.outcome) : impactedWorld.hoi.armies,
         lastBattles: normalizeArray(combat?.battles),
         lastSurrenders: normalizeArray(combat?.surrenders),
+        // Les fiches des 60 dernières batailles, pour la carte d'un événement (7.6).
+        battleLog: [...normalizeArray(impactedWorld.hoi.battleLog), ...normalizeArray(combat?.battles)].slice(-60),
       },
     };
   }

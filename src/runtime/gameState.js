@@ -2933,6 +2933,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
         .filter(Boolean),
     )].slice(0, 8),
     source: normalizeOptionalString(entry.source) || "scenario",
+    // Phase 7.6 : la bataille du moteur que l'événement raconte (world.hoi.battleLog).
+    ...(normalizeOptionalString(entry.battleId || entry.battle?.id) ? { battleId: normalizeOptionalString(entry.battleId || entry.battle?.id) } : {}),
     title,
   };
 };

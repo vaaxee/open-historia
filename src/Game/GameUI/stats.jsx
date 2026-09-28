@@ -30,6 +30,7 @@ import {
     normalizeCountryStatsTracking,
 } from "../../runtime/countryStats.js";
 import { compareGameDates, formatGameDateReadable, gameDateDayNumber, parseGameDate } from "../../runtime/gameDates.js";
+import MilitaryStats from "./MilitaryStats.jsx";
 import {
     DEFAULT_STAT_INDEX_ROWS,
     flattenStatSheetRows,
@@ -1947,7 +1948,20 @@ const StatsPaneBody = ({ active }) => {
             onClick={() => setStatsView("economy")}
             style={statsSubtabStyle(statsView === "economy")}
             >{statSheetDefinition.custom ? "📊 National" : "📈 Economy"}</button>
+            {/* Phase 7.6 : armées, ravitaillement, production, fronts, batailles. */}
+            {worldSnapshot?.hoi?.armies && (
+                <button
+                type="button"
+                aria-pressed={statsView === "military"}
+                onClick={() => setStatsView("military")}
+                style={statsSubtabStyle(statsView === "military")}
+                >⚔ Military</button>
+            )}
             </div>
+
+            {statsView === "military" && worldSnapshot && (
+                <MilitaryStats world={worldSnapshot} targetCountry={targetCountry} />
+            )}
 
             {statsView === "economy" && statSheetDefinitionError && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>

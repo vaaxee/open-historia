@@ -336,6 +336,7 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
     source: "engine",
     combatants: [battle.attacker, battle.defender],
     battle,
+    battleId: battle.id,
     impacts: battle.result === "captured"
       ? { regionControlOps: [{ op: "control", regionId: battle.stateId, regionName: battle.stateName, fromCode: battle.defender, toCode: battle.attacker, note: `engine battle ${battle.id}` }] }
       : {},

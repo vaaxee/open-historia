@@ -50,6 +50,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateForDisplay, formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
+import BattleSheet from "./BattleSheet.jsx";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 
 dayjs.extend(advancedFormat);
@@ -918,6 +919,9 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
             </div>
         )}
+
+        {/* Phase 7.6 : la fiche de la bataille que le moteur a résolue. */}
+        {event.battleId ? <BattleSheet battleId={event.battleId} /> : null}
 
         {documents.length > 0 && (
             <div style={{ display: "grid", gap: "0.35rem" }}>
