@@ -54,8 +54,12 @@ const states = {};
 for (const [index, stateId] of (scenario.states ?? []).entries()) {
   const province = byId.get(index + 1);
   if (!stateId || !province) continue;
-  const state = (states[stateId] ??= { terrains: {}, coastal: false, areaKm2: 0, population: 0, railKm: 0 });
+  const state = (states[stateId] ??= { terrains: {}, coastal: false, areaKm2: 0, population: 0, railKm: 0, lng: 0, lat: 0 });
   const area = Number(province.areaKm2) || 0;
+  // Le centre de l'état, pondéré par la surface (météo du combat, 7.4).
+  const [plng, plat] = Array.isArray(province.center) ? province.center : [0, 0];
+  state.lng += plng * area;
+  state.lat += plat * area;
   state.terrains[province.terrain] = (state.terrains[province.terrain] ?? 0) + area;
   state.coastal ||= Boolean(province.coastal);
   state.areaKm2 += area;
@@ -109,6 +113,8 @@ for (const [stateId, state] of Object.entries(states)) {
     coastal: state.coastal,
     areaKm2: Math.round(state.areaKm2),
     population: Math.round(state.population),
+    lng: Math.round((state.areaKm2 ? state.lng / state.areaKm2 : 0) * 100) / 100,
+    lat: Math.round((state.areaKm2 ? state.lat / state.areaKm2 : 0) * 100) / 100,
     railKm,
     rail: railLevel(railKm, state.areaKm2),
     neighbours: Object.keys(links[stateId] ?? {}).sort(),

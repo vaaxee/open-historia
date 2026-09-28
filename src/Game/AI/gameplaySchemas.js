@@ -817,11 +817,13 @@ const projectOpSchema = {
 // the receipt reports.
 const economyOpSchema = {
   type: "object",
-  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech; damage = bomb or sabotage a building; recruit = raise divisions from stock.",
+  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech; damage = bomb or sabotage a building; recruit = raise divisions from stock; front = open/set a front against an enemy at war.",
   properties: {
-    op: { type: "string", enum: ["modifier", "stock", "line", "research", "damage", "recruit"] },
+    op: { type: "string", enum: ["modifier", "stock", "line", "research", "damage", "recruit", "front"] },
     template: textSchema("recruit: infanterie, blindes, artillerie, chasse, bombardement or flotte."),
-    count: { type: "number", description: "recruit: 1-5." },
+    count: { type: "number", description: "recruit: 1-5; front: divisions to send." },
+    enemy: textSchema("front: the enemy."),
+    posture: { type: "string", enum: ["hold", "attack", "breakthrough"] },
     target: textSchema("damage: the building's exact map name."),
     polity: textSchema("Country name as in [ÉCONOMIE]."),
     value: { type: "number", description: "modifier: -0.5 to 0.5; research: 0-0.25 of its cost; damage: 0.1-0.5." },

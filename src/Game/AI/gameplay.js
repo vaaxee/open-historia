@@ -124,6 +124,8 @@ import {
 import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
 import { fixCapitalMisnaming, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { buildSupplyFor } from "../../runtime/worldmap/supplyMap.js";
+import { buildWarMap } from "../../runtime/worldmap/warMap.js";
+import { applyFrontsForTurn } from "../../runtime/worldmap/frontsTurn.js";
 import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
 import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
@@ -6026,22 +6028,47 @@ const checkClaimsAgainstHolders = (containers, world) => {
 // Phase 7.2 : la carte de ravitaillement de chaque pays pour ce tour
 // (runtime/worldmap/supplyMap.js), ou null hors de la carte mondiale, sans armées
 // ou sans données (le moteur ravitaille alors depuis la réserve seule).
+// Phase 7 : ce que les armées savent de la carte pour ce tour — catalogue des
+// états, données de ravitaillement (terrain, rail, voisins), capitales — ou null
+// hors de la carte mondiale, sans armées ou sans données.
+const armyMapContext = async (world) => {
+  if (!world?.hoi?.armies || !(await isWorldMapGame())) return null;
+  const info = await loadWorldMapSupply();
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!Object.keys(info).length || !catalog.length) return null;
+  const capitals = await loadWorldMapCapitals().catch(() => ({}));
+  return { catalog, info, capitals };
+};
+
 const supplyForTurn = async (world) => {
   try {
-    if (!world?.hoi?.armies || !(await isWorldMapGame())) return null;
-    const info = await loadWorldMapSupply();
-    const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
-    if (!Object.keys(info).length || !catalog.length) return null;
-    const capitals = await loadWorldMapCapitals().catch(() => ({}));
+    const context = await armyMapContext(world);
+    if (!context) return null;
     let stateAt = () => "";
     try {
       const gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
       stateAt = (lng, lat) => (Number.isFinite(lng) && Number.isFinite(lat) ? gazetteer.regionAt([lng, lat])?.id ?? "" : "");
     } catch { /* sans géométrie, dépôts et ports ne comptent que par leur regionId */ }
-    return buildSupplyFor({ world, catalog, info, capitals, stateAt });
+    return buildSupplyFor({ world, ...context, stateAt });
   } catch (error) {
     console.warn("[supply] the supply map could not be built; divisions draw on their stockpile only.", error);
     return null;
+  }
+};
+
+// Phase 7.3 : les fronts après les impacts du tour (runtime/worldmap/frontsTurn.js) :
+// ordres de front des IA, fronts sans guerre fermés, divisions redéployées sur
+// la ligne. Le reçu dit ce qui a été refusé.
+const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null } = {}) => {
+  try {
+    const context = await armyMapContext(world);
+    if (!context) return world;
+    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date });
+    for (const note of result.notes) noteReceipt(receipt, note.kind, note.text);
+    return result.world;
+  } catch (error) {
+    console.warn("[fronts] the fronts could not be updated this turn.", error);
+    return world;
   }
 };
 
@@ -7337,6 +7364,7 @@ const applySimulationResult = async ({
     // la carte mondiale et pour une partie qui a des armées.
     supplyFor: await supplyForTurn(impactedWorld),
   });
+  impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats

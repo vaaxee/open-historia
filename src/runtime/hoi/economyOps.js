@@ -45,7 +45,7 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front"]);
 
 // Phase 7.1 : au plus tant de divisions par demande de recrutement.
 export const RECRUIT_MAX_PER_OP = 5;
@@ -75,6 +75,8 @@ const OP_ALIASES = Object.freeze({
   recrutement: "recruit",
   raise: "recruit",
   levy: "recruit",
+  front: "front",
+  frontop: "front",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -135,6 +137,23 @@ export const normalizeEconomyOp = (entry) => {
     const amount = finite(entry.amount ?? entry.delta ?? entry.value);
     if (!resource || !Number.isFinite(amount) || amount === 0) return null;
     return { ...base, resource, amount };
+  }
+
+  // Phase 7.3 : un front contre un ennemi (fronts.js) ; appliqué au tour avec la
+  // carte et les guerres (gameplay.js), pas ici.
+  if (op === "front") {
+    const enemy = text(entry.enemy ?? entry.opponent);
+    if (!enemy) return null;
+    const posture = text(entry.posture);
+    const count = finite(entry.count ?? entry.amount);
+    const template = normalizeResourceKey(entry.template);
+    return {
+      ...base,
+      enemy,
+      ...(posture ? { posture } : {}),
+      ...(Number.isFinite(count) && count >= 1 ? { count: Math.floor(count) } : {}),
+      ...(template ? { template } : {}),
+    };
   }
 
   // Phase 7.1 : une demande de divisions (armies.js recruitDivision).
@@ -304,7 +323,8 @@ export const applyEconomyOps = (hoi, ops, { date = null, title = "" } = {}) => {
   const prefix = title ? `Event "${title}": ` : "";
   const say = (kind, textValue) => notes.push({ kind, text: `${prefix}economyOps — ${textValue}` });
   // "damage" touche la carte, pas world.hoi : applyBuildingDamage s'en charge.
-  const list = (Array.isArray(ops) ? ops : []).map(normalizeEconomyOp).filter((op) => op && op.op !== "damage");
+  // "front" demande la carte et les guerres : appliqué au tour (fronts.js).
+  const list = (Array.isArray(ops) ? ops : []).map(normalizeEconomyOp).filter((op) => op && op.op !== "damage" && op.op !== "front");
   if (!list.length) return { hoi, applied: 0, notes };
   if (!isObject(hoi) || !isObject(hoi.nations)) {
     say("dropped", `${list.length} operation(s) ignored: this game has no economy layer.`);
