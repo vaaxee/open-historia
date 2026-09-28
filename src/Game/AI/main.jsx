@@ -87,6 +87,8 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
+import { buildEconomyPromptBlock } from "../../runtime/hoi/engine.js";
+import { buildMilitaryPromptBlock } from "../../runtime/hoi/militaryPrompt.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -2818,6 +2820,11 @@ async function buildAdvisorSystemPrompt() {
         // The Game Master's standing reminders (runtime/gmChanges.js): what is
         // true now, whatever the record says. Empty — and so absent — without any.
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
+        // Phase 7.5 : l'économie, les armées, les fronts, le ravitaillement et les
+        // dernières batailles, chiffrés par le moteur (runtime/hoi/). Le conseiller
+        // les lit ; il ne les invente ni ne les corrige.
+        buildEconomyPromptBlock(worldData, gameData?.country, { others: 4 }),
+        buildMilitaryPromptBlock(worldData, gameData?.country, { others: 6 }),
         ADVISOR_FORMATTING_DIRECTIVE,
     ].filter(Boolean);
     return `${rendered}\n\n${directives.join("\n\n")}`;
@@ -2924,7 +2931,11 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         : "";
 
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    const prompt = `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    // Phase 7.5 : ce que ce gouvernement sait de ses propres forces, de ses fronts
+    // et de ses batailles (runtime/hoi/militaryPrompt.js) — jamais le détail des
+    // armées des autres.
+    const forces = buildMilitaryPromptBlock(worldData, speaker, { others: 0 });
+    const prompt = `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}${forces ? `\n\n${forces}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
     // [Realpolitik] (realpolitik.js): the leader weighs a proposal by reason of
     // state at the game's date, not by an assistant's morals. Appended here, not
     // written into the frozen leader prompt, so it reaches existing campaigns.

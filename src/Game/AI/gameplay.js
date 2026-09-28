@@ -112,6 +112,7 @@ import {
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
 import {
   atWar,
+  coBelligerents,
   capitulationEvent,
   capitulationRecord,
   checkControlOperation,
@@ -125,6 +126,7 @@ import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
 import { fixCapitalMisnaming, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { buildSupplyFor } from "../../runtime/worldmap/supplyMap.js";
 import { buildWarMap } from "../../runtime/worldmap/warMap.js";
+import { applyCombatOutcome, battleEvent, resolveCombat } from "../../runtime/hoi/combat.js";
 import { applyFrontsForTurn } from "../../runtime/worldmap/frontsTurn.js";
 import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
@@ -2276,6 +2278,10 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     if (economy) {
       systemPrompt = `${systemPrompt}\n\n[Economy Layer]\nThis campaign runs an engine-tracked war economy. The figures below are COMPUTED by the engine, which advances extraction, stocks, production and factory efficiency on its own over every day of this jump. Never invent or restate those numbers in an event, and never narrate an output the figures cannot support: a nation short of a resource produces less, and your events must reflect that shortage rather than contradict it.\nWhen an event genuinely changes the economy - a strike, an embargo or blockade, a trade contract or delivery, a seizure, a sabotage, a retooling of factories - that SAME event carries impacts.economyOps, and the engine applies it within fixed bounds (a production modifier between -50% and +50% for 1 to 365 days, a stock movement of at most a quarter of the reserve or a month of extraction, factories only up to the free military factories). Any country listed below may be affected, including rivals. Reuse the same label for the same cause: it replaces the earlier modifier instead of stacking. Be proportionate: most jumps change nothing, and an operation that the story does not justify is worse than none. Whatever the engine capped or refused is reported to you next turn.\nResearch is engine-run too: it picks every country's research except the player's, and finishes technologies on its own. Never have a country field, build or unveil equipment listed as not yet unlocked. A stolen blueprint, a defecting engineer or an allied exchange may speed one AVAILABLE technology with an economyOps research entry (techId from the list, value up to 0.25 of its cost); it never hands a technology over outright.\nBuildings are engine-run as well. When an event founds a factory, refinery, mine, steelworks, fort, radar station, airfield or port, give it a markerOps build whose kind names that type ("usine militaire", "usine civile", "raffinerie", "mine", "aciérie", "fort", "radar", "aérodrome", "port"): the engine turns it into a construction site that the owner's civilian factories must finish, so never narrate it as operating before the engine reports it done. A bombing raid or sabotage that hits one carries an economyOps damage entry with its exact map name as target (value 0.1 to 0.5 of its condition); repairs happen on their own, never narrate them as instant.\n${economy}`;
     }
+    // Phase 7.5 (runtime/hoi/militaryPrompt.js) : armées, fronts, ravitaillement,
+    // et les batailles de ce tour, déjà décidées par le moteur.
+    const military = normalizeString(variables.militarySummary);
+    if (military) systemPrompt = `${systemPrompt}\n\n${military}`;
   }
 
   // The unit contract itself. defaultPrompts.json carries the same rules for NEW
@@ -6056,6 +6062,82 @@ const supplyForTurn = async (world) => {
   }
 };
 
+// Phase 7.4-7.5 : les batailles du saut, résolues par le moteur AVANT que l'IA
+// n'écrive (runtime/hoi/combat.js), sur le monde de départ : leurs fiches vont au
+// prompt, leurs événements dans la réponse (addEngineBattles), leurs pertes aux
+// armées à l'application. Null sans front engagé, hors de la carte mondiale.
+const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) => {
+  try {
+    const world = bundle?.world;
+    if (!normalizeArray(world?.hoi?.fronts).length) return null;
+    const context = await armyMapContext(world);
+    if (!context) return null;
+    const map = buildWarMap({ world, ...context });
+    const wars = warsFor(world);
+    // Les forts de la carte, par état (le plus fort l'emporte).
+    const forts = new Map();
+    const fortMarkers = normalizeArray(world.markers).filter((marker) => marker?.building?.type === "fort");
+    if (fortMarkers.length) {
+      const gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+      for (const marker of fortMarkers) {
+        const stateId = normalizeString(marker.regionId) || gazetteer.regionAt([Number(marker.lng), Number(marker.lat)])?.id || "";
+        if (stateId) forts.set(stateId, Math.max(forts.get(stateId) ?? 0, Number(marker.building.level) || 0));
+      }
+    }
+    const date = addIsoDays(originDate, Math.max(1, Math.min(3, Math.round(days / 2)))) || originDate;
+    const combat = resolveCombat({
+      world,
+      map,
+      atWar: (a, b) => atWar(wars, a, b),
+      sideOf: (polity) => [...coBelligerents(wars, polity)],
+      date,
+      days,
+      seed: `${normalizeString(bundle.game?.startDate)}|${normalizeString(bundle.game?.country)}`,
+      fortAt: (id) => forts.get(id) ?? 0,
+    });
+    if (!combat.battles.length && !combat.surrenders.length) return null;
+    return { ...combat, date, names: Object.fromEntries(map.states.map((id) => [id, map.nameOf(id)])) };
+  } catch (error) {
+    console.warn("[combat] the battles could not be resolved this turn.", error);
+    return null;
+  }
+};
+
+// Les batailles du moteur dans la réponse du premier segment : un événement par
+// bataille, à sa date, lié à sa guerre, dans la langue du tour ; une prise porte
+// son regionControlOps, qui passe par les règles de guerre comme toute occupation.
+// Une poche qui se rend a son événement aussi.
+const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}) => {
+  if (!combat || !candidate || !Array.isArray(candidate.events)) return;
+  const language = detectLanguage(candidate.events.map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
+  const nameOf = language === "fr" ? frenchPolityName : (name) => name;
+  const wars = warsFor(world);
+  const warIdFor = (a, b) => wars.find((war) => war.status === "active"
+    && ((war.sideA.some((n) => n === a) && war.sideB.some((n) => n === b)) || (war.sideA.some((n) => n === b) && war.sideB.some((n) => n === a))))?.id ?? "";
+  const events = normalizeArray(combat.battles).map((battle) => ({ ...battleEvent(battle, { language, nameOf }), warId: warIdFor(battle.attacker, battle.defender) }));
+  const pockets = {};
+  for (const surrender of normalizeArray(combat.surrenders)) if (surrender.reason === "encircled") (pockets[surrender.owner] ??= []).push(surrender);
+  for (const [owner, list] of Object.entries(pockets)) {
+    const place = combat.names?.[list[0].stateId] || list[0].stateId;
+    events.push({
+      date: combat.date,
+      title: language === "fr" ? `${nameOf(owner)} : reddition de ${list.length} division(s) encerclée(s)` : `${owner}: ${list.length} encircled division(s) surrender`,
+      description: language === "fr"
+        ? `Coupées de tout ravitaillement depuis plus d'un mois et sans organisation, ${list.length} division(s) de ${nameOf(owner)} se rendent près de ${place}.`
+        : `Cut off from supply for over a month and without organisation, ${list.length} division(s) of ${owner} surrender near ${place}.`,
+      kind: "military", importance: "major", notable: true, source: "engine", impacts: {},
+    });
+  }
+  let count = 0;
+  for (const event of events) {
+    const id = `engine-battle-${candidate.events.length + 1}`;
+    const dated = candidate.events.findIndex((entry) => normalizeString(entry?.date) > normalizeString(event.date));
+    insertEventAt(candidate, { ...event, id }, dated < 0 ? candidate.events.length : dated, EVENT_INDEX_DECODERS);
+    count += 1;
+  }
+  if (count) noteReceipt(receipt, "adjusted", `The engine resolved ${combat.battles.length} battle(s) this period and added their events; the story narrates them and changes none of their results.`);
+};
+
 // Phase 7.3 : les fronts après les impacts du tour (runtime/worldmap/frontsTurn.js) :
 // ordres de front des IA, fronts sans guerre fermés, divisions redéployées sur
 // la ligne. Le reçu dit ce qui a été refusé.
@@ -6115,6 +6197,8 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
   const wars = warsFor(worldState, decodeWarUpdates(candidate?.warUpdates));
   const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
   const allowance = occupationAllowance(spanDays);
+  const frontPairKey = (a, b) => [normalizeString(a).toLowerCase(), normalizeString(b).toLowerCase()].sort().join("|");
+  const engineFronts = new Set(normalizeArray(worldState.hoi?.fronts ?? world?.hoi?.fronts).map((front) => frontPairKey(front?.owner, front?.enemy)));
   const taken = new Map();
   const refused = [];
   for (const { impacts, path } of containers) {
@@ -6123,6 +6207,16 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
     for (const op of normalizeArray(impacts.unitOps)) addUnit(op?.regionId ?? op?.unit?.regionId, op?.unit?.ownerCode ?? op?.ownerCode);
     const keptOps = [];
     for (const op of normalizeArray(impacts.regionControlOps)) {
+      // Phase 7.5 : entre deux pays qu'un front oppose, seules les batailles du
+      // moteur prennent des états (runtime/hoi/combat.js).
+      const kind = normalizeString(op?.op).toLowerCase();
+      const attacker = normalizeString(kind === "control" ? op?.toCode : op?.actorCode);
+      const defender = map.controllerOf(normalizeString(op?.regionId));
+      const engineOp = normalizeString(op?.note).startsWith("engine battle");
+      if (!engineOp && (kind === "control" || kind === "contest") && engineFronts.has(frontPairKey(attacker, defender))) {
+        refused.push({ path, family: "regionControlOps", label: normalizeString(op?.regionName) || map.nameOf(normalizeString(op?.regionId)), warRule: `the front between ${attacker} and ${defender} is fought by the engine: only its battles take states` });
+        continue;
+      }
       const reason = checkControlOperation({ op, wars, map, taken, allowance });
       if (reason) {
         refused.push({ path, family: "regionControlOps", label: normalizeString(op?.regionName) || map.nameOf(normalizeString(op?.regionId)), warRule: reason });
@@ -7351,6 +7445,22 @@ const applySimulationResult = async ({
   });
   const nextColors = impactMerge.colors;
   let impactedWorld = impactMerge.world;
+  // Phase 7.5 : les batailles du moteur (resolveCombatForJump) pèsent sur les
+  // armées du tour — pertes, organisation, moral, déplacements, redditions — et
+  // leurs fiches restent pour les panneaux et le tour suivant. Les prises, elles,
+  // sont passées par les événements de bataille et les règles de guerre.
+  if (impactedWorld?.hoi?.armies) {
+    const combat = result.engineCombat;
+    impactedWorld = {
+      ...impactedWorld,
+      hoi: {
+        ...impactedWorld.hoi,
+        armies: combat ? applyCombatOutcome(impactedWorld.hoi.armies, combat.outcome) : impactedWorld.hoi.armies,
+        lastBattles: normalizeArray(combat?.battles),
+        lastSurrenders: normalizeArray(combat?.surrenders),
+      },
+    };
+  }
   // Couche HOI4 (src/runtime/hoi/) : le moteur fait avancer économie et production
   // sur les jours du saut, APRÈS les impacts IA pour que ceux-ci comptent dès ce
   // tour. Inerte tant que la partie n'a pas de world.hoi. Recalculé depuis
@@ -12593,6 +12703,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // event, before the war rules read the answer; an order that names nobody
           // is refused in the receipt. The first segment only: orders are the round's.
           if (segmentIndex === 0) addPlayerWars(candidate, bundle, { date: addIsoDays(state.segmentOrigin, 1) || state.segmentOrigin, receipt: draft });
+          // The engine's battles of the period, as its own events (addEngineBattles).
+          if (segmentIndex === 0) addEngineBattles(candidate, context.engineCombat, { world: bundle.world, receipt: draft });
           // The player's proposals were answered before the turn (playerDiplomacy.js):
           // an agreement with a counterpart who did not accept is removed, and so is
           // a chat that would have them restate the proposal.
@@ -13326,6 +13438,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     hiddenEvents: state.hiddenEvents,
     boardProvisionalEventIds: state.boardProvisionalEventIds,
     receipt: state.receipt,
+    // Phase 7.5 : ce que les batailles du moteur font aux armées, appliqué avec le tour.
+    engineCombat: context.engineCombat ?? null,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -13401,7 +13515,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
-  const variables = await buildTemplateVariables(proposals.actions ? { ...bundle, actions: proposals.actions } : bundle, {
+  // Phase 7.4-7.5 : le moteur livre les batailles de la période avant que l'IA
+  // n'écrive ; leurs fiches vont au prompt (militarySummary), leurs événements
+  // dans la réponse, leurs pertes aux armées (resolveCombatForJump).
+  const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep });
+  const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
@@ -13450,6 +13568,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     plannedActionShare,
     // The verdicts on the player's proposals, which the answer must respect.
     proposalVerdicts: proposals.verdicts,
+    // The engine's battles for this period (resolveCombatForJump), or null.
+    engineCombat,
     safeDays,
     segmentDays,
     targetDate,

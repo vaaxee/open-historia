@@ -23,6 +23,7 @@ import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } f
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { buildEconomyPromptBlock } from "../../runtime/hoi/engine.js";
+import { buildMilitaryPromptBlock } from "../../runtime/hoi/militaryPrompt.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -2006,6 +2007,13 @@ export const buildPromptContext = async (bundle, {
   // ni le bloc [ÉCONOMIE] ni economyOps à l'outil du tour.
   if (wants("economySummary")) {
     result.economySummary = buildEconomyPromptBlock(bundle.world, normalizeString(bundle.game?.country), { others: 8 });
+    // Phase 7.5 : armées, fronts, ravitaillement, et les batailles que le moteur
+    // vient de décider pour ce tour (bundle.engineCombat, simulateTimelineJump).
+    result.militarySummary = buildMilitaryPromptBlock(bundle.world, normalizeString(bundle.game?.country), {
+      others: 10,
+      battles: bundle.engineCombat?.battles ?? null,
+      forTurn: true,
+    });
   }
 
   const worldBeforeRoundOne =
