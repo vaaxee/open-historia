@@ -740,6 +740,24 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       const matchingUpdate = updates.find((update) => normalizeString(update?.id) === explicitWarId);
       if (known || matchingUpdate) continue;
 
+      // An id the model remembered from an earlier answer (test F, 22–29 January:
+      // "war-soviet-union-lithuania-1936-01-16", a war the ledger had dropped)
+      // while this answer or the world already holds the one war between those
+      // two: the event joins that war instead of founding a second one.
+      const sameFront = [
+        ...matchingWarForCombatants(wars, combatants, new Set(["active"])),
+        ...matchingStartUpdateForCombatants(updates, combatants),
+      ];
+      if (sameFront.length === 1) {
+        event.warId = sameFront[0].id;
+        bound += 1;
+        console.warn(
+          `[OH war ledger binding] combat event "${normalizeString(event.title)}" named unknown war ${explicitWarId}; ` +
+          `bound to ${sameFront[0].id}, the one war between its combatants.`,
+        );
+        continue;
+      }
+
       // A model-supplied id + two names is NOT enough to create belligerency.
       // The causal event must independently narrate direct opposition or an
       // explicit war start. Otherwise fail closed and request correction.

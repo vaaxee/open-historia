@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import { declaresWar, insertEventAt, planPlayerWars, warOrderTarget } from "./playerWarOrders.js";
-import { eventDeclaresWar, eventNarratesHardCombat, validateCanonicalWarEvents } from "./nativeWarLedger.js";
+import { decodeWarUpdates, eventDeclaresWar, eventNarratesHardCombat, reconcileCombatWarState, validateCanonicalWarEvents } from "./nativeWarLedger.js";
 
 const world = {
   polityOverrides: {
@@ -79,9 +79,61 @@ test("the skip starts the player's wars before the war rules read the answer, on
   const verdicts = source.indexOf("enforceProposalVerdicts(candidate, context.proposalVerdicts ?? []", add);
   assert.ok(add > 0 && verdicts > add && validate > verdicts, "wars, then the proposals' verdicts, then the validation that reads both");
   const helper = source.slice(source.indexOf("const addPlayerWars = "), source.indexOf("const checkClaimsAgainstHolders = "));
-  assert.match(helper, /candidate\.events\.push\(\{ \.\.\.event, id \}\);/, "a new war: at the end, so cited indexes stay right");
+  // Test F, 22–29 January: the declaration dated the 23rd came last, after the 28th.
+  assert.match(helper, /const dated = candidate\.events\.findIndex\(\(entry\) => normalizeString\(entry\?\.date\) >= normalizeString\(event\.date\)\);/, "a new war: at its date, ahead of that day's events");
+  assert.match(helper, /insertEventAt\(candidate, \{ \.\.\.event, id \}, dated < 0 \? candidate\.events\.length : dated, EVENT_INDEX_DECODERS\)/, "and every record citing events by number moves along");
   assert.match(helper, /insertEventAt\(candidate, \{ \.\.\.event, id \}, tied\.length \? Math\.min\(\.\.\.tied\) : candidate\.events\.length, EVENT_INDEX_DECODERS\)/);
+  assert.match(helper, /announcer\.warId = war\.id;/, "an answer's own declaration carries the war, with no second announcement");
   assert.match(helper, /noteReceipt\(receipt, "dropped", `The player's order/);
+});
+
+test("the engine's declaration goes in at its date and the answer's records follow it", () => {
+  const candidate = {
+    events: [
+      { date: "1936-01-23", title: "Lituanie : Échec de la mobilisation soviétique à Kaunas" },
+      { date: "1936-01-28", title: "Italie : Proposition de médiation" },
+    ],
+    storylineUpdates: [{ id: "s1", eventIndexes: [0, 1] }],
+  };
+  const at = insertEventAt(candidate, { date: "1936-01-23", title: "Déclaration de guerre : Union soviétique contre Lituanie" }, 0, { storylineUpdates: (value) => value });
+  assert.equal(at, 0);
+  assert.deepEqual(candidate.events.map((event) => event.date), ["1936-01-23", "1936-01-23", "1936-01-28"]);
+  assert.deepEqual(candidate.storylineUpdates[0].eventIndexes, [1, 2]);
+});
+
+// Test F, 22–29 January: "Lituanie : Déclaration de guerre soviétique et avancée…"
+// had no war record, the engine added its own announcement beside it, and the
+// ledger made a second war out of the first.
+test("an answer that tells the declaration without a war record carries the player's war itself", () => {
+  const events = [
+    { title: "Lituanie : Déclaration de guerre soviétique et avancée vers Kaunas", description: "L'Union soviétique déclare la guerre à la Lituanie." },
+    { title: "Italie : Proposition de médiation", description: "" },
+  ];
+  const { started } = planPlayerWars({ actions: orders(), world, player: "Soviet Union", events, date: "1936-01-23", language: "fr" });
+  assert.equal(started.length, 1);
+  assert.equal(started[0].announcer, 0);
+  assert.equal(started[0].event, null, "no engine announcement beside the answer's own");
+  const other = planPlayerWars({ actions: orders(), world, player: "Soviet Union", events: [events[1]], date: "1936-01-23" });
+  assert.equal(other.started[0].announcer, undefined);
+  assert.ok(other.started[0].event, "none in the answer: the engine announces it");
+});
+
+test("a combat event naming a war the ledger does not know joins the one war between its sides", () => {
+  const candidate = {
+    events: [
+      { id: "e0", date: "1936-01-23", title: "Déclaration de guerre : Union soviétique contre Lituanie", warId: "war-a" },
+      {
+        id: "e1", date: "1936-01-23", title: "Lituanie : bataille de Kaunas",
+        description: "Les combats font rage autour de Kaunas.", warId: "war-soviet-union-lithuania-1936-01-16",
+        combatants: ["Soviet Union", "Lithuania"],
+      },
+    ],
+    warUpdates: [{ id: "war-a", op: "start", actors: ["Soviet Union"], opponents: ["Lithuania"], eventIndexes: [0], eventIds: ["e0"] }],
+  };
+  const repair = reconcileCombatWarState(candidate, { world: { wars: [] } });
+  assert.equal(repair.started, 0, "no second war");
+  assert.equal(candidate.events[1].warId, "war-a");
+  assert.equal(decodeWarUpdates(candidate.warUpdates).length, 1);
 });
 
 // Test F, 8–15 January: the model started the war on its offensive towards Kaunas.

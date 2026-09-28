@@ -106,6 +106,22 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
       continue;
     }
     const id = clean(existing?.id) || `war-${slug(player)}-${slug(target)}-${slug(date) || "start"}`;
+    // The answer wrote the declaration but no war record (test F, 22–29 January:
+    // "Lituanie : Déclaration de guerre soviétique et avancée…", and the engine's
+    // announcement beside it): the war is tied to that event, with no second one.
+    const own = existing ? -1 : list(events).findIndex((entry) => eventDeclaresWar(entry)
+      && mentionedPolities(`${clean(entry?.title)}. ${clean(entry?.description)}`, world).some((name) => key(name) === key(target)));
+    if (own >= 0) {
+      started.push({
+        action,
+        target,
+        existing: null,
+        announcer: own,
+        war: { id, op: "start", actors: [player], opponents: [target], eventIndexes: [], eventIds: [], note: `${player} declared war on ${target}` },
+        event: null,
+      });
+      continue;
+    }
     started.push({
       action,
       target,

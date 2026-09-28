@@ -9,10 +9,12 @@ import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
     normalizeActionEntry,
+    readActionsState,
     readWorldState,
     writeActionsState,
     writeWorldState,
 } from "../../runtime/gameState.js";
+import { actionsSignatureOf, settleActionsAfterTurn } from "./actionsSettle.js";
 import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -481,14 +483,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // its own drawer) used to be invisible here until the panel was closed and
         // reopened. The store publishes those writes. Signature-gated so a
         // republish with no real change doesn't reset hover state on every row.
-        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}`).join("|");
         const unsubscribe = subscribeRuntime("actions", (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
-            setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
+            setActions((prev) => (actionsSignatureOf(saved) === actionsSignatureOf(prev) ? prev : saved));
+        });
+        // And from the save itself on every opening, once no turn is running.
+        const settle = settleActionsAfterTurn({
+            isBusy: isSimulationBusy,
+            read: () => readActionsState({ force: true }),
+            apply: (list) => { if (!cancelled) setActions((prev) => (actionsSignatureOf(list) === actionsSignatureOf(prev) ? prev : list)); },
         });
 
         return () => {
             cancelled = true;
+            settle.cancel();
             unsubscribe();
         };
     }, [isOpen]);
@@ -497,13 +505,26 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     // "resolved" (submittedActions filters those out). The first value only
     // seeds the ref; a freshly queued next-turn action is already persisted, so
     // the reload keeps it.
+    //
+    // Test F (15–22 and 22–29 January 1936): straight after a turn the panel
+    // still listed the turn's orders as "ACTION • PLANIFIÉ" until the page was
+    // reloaded. The new round is published before the turn has finished writing
+    // its orders, and what the panel then heard could still be the list from
+    // before. So, open or not, the panel waits for the turn to be over and reads
+    // the orders from the save itself (settleActionsAfterTurn).
     React.useEffect(() => {
-        if (!isOpen || !game.round) return;
-        if (lastRoundRef.current !== null && game.round !== lastRoundRef.current) {
-            void refreshRuntimeState(["actions"]);
-        }
+        if (!game.round) return undefined;
+        const changed = lastRoundRef.current !== null && game.round !== lastRoundRef.current;
         lastRoundRef.current = game.round;
-    }, [isOpen, game.round]);
+        if (!changed) return undefined;
+        void refreshRuntimeState(["actions"]);
+        const settle = settleActionsAfterTurn({
+            isBusy: isSimulationBusy,
+            read: () => readActionsState({ force: true }),
+            apply: (list) => setActions((prev) => (actionsSignatureOf(list) === actionsSignatureOf(prev) ? prev : list)),
+        });
+        return () => settle.cancel();
+    }, [game.round]);
 
     const persistActions = async (nextActions) => {
         setActions(nextActions);

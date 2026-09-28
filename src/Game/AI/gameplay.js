@@ -5937,11 +5937,27 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
     const event = candidate.events[normalizeArray(record?.eventIndexes)[0]];
     if (record && event) protectPlayerWar(candidate, { record, event: { ...event, warId: id }, eventId: normalizeString(event.id), title: normalizeString(event.title) });
   }
-  for (const { action, target, war, event, existing } of started) {
+  // Held by reference: an insertion below moves the numbers.
+  const announcers = new Map(started.filter((entry) => Number.isInteger(entry.announcer)).map((entry) => [entry, candidate.events[entry.announcer]]));
+  for (const entry of started) {
+    const { action, target, war, event, existing } = entry;
     const id = `engine-war-${candidate.events.length + 1}`;
+    const announcer = announcers.get(entry);
+    if (announcer && typeof announcer === "object") {
+      // The answer's own declaration is the announcement.
+      announcer.warId = war.id;
+      const index = candidate.events.indexOf(announcer);
+      const record = { ...war, eventIndexes: [index], eventIds: normalizeString(announcer.id) ? [normalizeString(announcer.id)] : [] };
+      candidate.warUpdates = [...decodeWarUpdates(candidate.warUpdates), record];
+      protectPlayerWar(candidate, { record, event: { ...announcer }, eventId: normalizeString(announcer.id), title: normalizeString(announcer.title) });
+      noteReceipt(receipt, "adjusted", `The player's order "${normalizeString(action?.title)}" declared war on ${target}; the answer told the declaration ("${normalizeString(announcer.title)}") without a war record, so the engine started the war (${war.id}) on that event. The two are at war: carry it forward.`);
+      continue;
+    }
     if (!existing) {
-      const index = candidate.events.length;
-      candidate.events.push({ ...event, id });
+      // At its date, ahead of that day's events: the list is read in order, and
+      // test F's declaration dated the 23rd came last, after the 28th.
+      const dated = candidate.events.findIndex((entry) => normalizeString(entry?.date) >= normalizeString(event.date));
+      const index = insertEventAt(candidate, { ...event, id }, dated < 0 ? candidate.events.length : dated, EVENT_INDEX_DECODERS);
       const record = { ...war, eventIndexes: [index], eventIds: [id] };
       candidate.warUpdates = [...decodeWarUpdates(candidate.warUpdates), record];
       protectPlayerWar(candidate, { record, event: { ...event, id }, eventId: id, title: event.title });
