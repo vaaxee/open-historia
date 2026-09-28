@@ -71,7 +71,10 @@ const groupByOwner = (catalog, overrides) => {
       group = { label: owner, regions: [] };
       groups.set(key, group);
     }
-    group.regions.push({ name: norm(region.name) || norm(region.id), id: norm(region.id) });
+    // A region's other names ride along (a world-map state's period name: Vilnius
+    // is "Wilno" in 1936), so the model can see which region a period name means.
+    const aliases = (Array.isArray(region.aliases) ? region.aliases : []).map(norm).filter(Boolean).slice(0, 2);
+    group.regions.push({ name: norm(region.name) || norm(region.id), id: norm(region.id), aliases });
   }
   return groups;
 };
@@ -139,7 +142,10 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   for (const [key, group] of focusEntries) {
     if (emitted >= focusTotalCap) break; // a focus power we cannot fit falls through to the roster
     const shown = group.regions.slice(0, ownerCap);
-    const list = shown.map((r) => (r.id ? `${r.name} (${r.id})` : r.name)).join(", ");
+    const list = shown.map((r) => {
+      const also = r.aliases?.length ? ` [also ${r.aliases.join(" / ")}]` : "";
+      return r.id ? `${r.name}${also} (${r.id})` : `${r.name}${also}`;
+    }).join(", ");
     const moreInGroup = group.regions.length - shown.length;
     const suffix = moreInGroup > 0 ? `, (+${moreInGroup} more)` : "";
     focusLines.push(`- ${headerLabel(key, group.label)} [${regionWord(group.regions.length)}]: ${list}${suffix}`);

@@ -5,6 +5,7 @@ import {
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
 import { extractJsonArray } from "./jsonSalvage.js";
+import { NARRATION_SCHEMA } from "./validatedNarration.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -2605,6 +2606,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
   geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
+  validatedNarration: NARRATION_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -2715,6 +2717,12 @@ export const GEOGRAPHY_RESOLVER_TOOL = makeTool(
   GEOGRAPHY_RESOLVER_SCHEMA,
 );
 
+export const VALIDATED_NARRATION_TOOL = makeTool(
+  "submit_narration",
+  "Rewrite the period's event titles and descriptions to match exactly what the engine applied; never change dates, impacts or the number of events.",
+  NARRATION_SCHEMA,
+);
+
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
   "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
@@ -2766,6 +2774,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   territoryDirector: TERRITORY_DIRECTOR_TOOL,
   geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
+  validatedNarration: VALIDATED_NARRATION_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,

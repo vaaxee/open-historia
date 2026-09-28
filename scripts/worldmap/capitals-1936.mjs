@@ -1,0 +1,40 @@
+// Carte mondiale : la capitale de chaque pays au 1er janvier 1936, pour l'IA
+// (qui prenait Vilnius pour la capitale de la Lituanie : c'était Kaunas).
+// [ville, longitude, latitude] ; correct-1936.mjs vérifie que chaque capitale
+// tombe dans un état de son pays et l'écrit dans provinces.v1.json (capitals).
+
+export const CAPITALS_1936 = Object.freeze({
+  Afghanistan: ["Kabul", 69.18, 34.53], Albania: ["Tirana", 19.82, 41.33], Argentina: ["Buenos Aires", -58.38, -34.6],
+  Austria: ["Vienna", 16.37, 48.21], "Belgian Congo": ["Léopoldville", 15.31, -4.32], Belgium: ["Brussels", 4.35, 50.85],
+  Bhutan: ["Punakha", 89.86, 27.59], Bolivia: ["La Paz", -68.15, -16.5], Brazil: ["Rio de Janeiro", -43.2, -22.91],
+  "British Kuwait": ["Kuwait City", 47.98, 29.37], "British Raj": ["New Delhi", 77.21, 28.61],
+  "British South Africa": ["Pretoria", 28.19, -25.75], "British Transjordan": ["Amman", 35.93, 31.95],
+  Bulgaria: ["Sofia", 23.32, 42.7], Chile: ["Santiago", -70.65, -33.45], "Chinese Soviet Republic": ["Bao'an (Zhidan)", 108.77, 36.82],
+  Colombia: ["Bogotá", -74.07, 4.71], "Costa Rica": ["San José", -84.09, 9.93], Cuba: ["Havana", -82.37, 23.13],
+  Czechoslovakia: ["Prague", 14.42, 50.09], "Danish Iceland": ["Reykjavík", -21.94, 64.15], Denmark: ["Copenhagen", 12.57, 55.68],
+  "Dominican Republic": ["Ciudad Trujillo", -69.93, 18.47], "Dominion of Australia": ["Canberra", 149.13, -35.28],
+  "Dominion of Canada": ["Ottawa", -75.7, 45.42], Ecuador: ["Quito", -78.47, -0.18], "El Salvador": ["San Salvador", -89.19, 13.69],
+  Estonia: ["Tallinn", 24.75, 59.44], Ethiopia: ["Addis Ababa", 38.75, 9.03], Finland: ["Helsinki", 24.94, 60.17],
+  France: ["Paris", 2.35, 48.86], "Free City of Danzig": ["Danzig", 18.65, 54.35], "French Syria": ["Damascus", 36.29, 33.51],
+  "Gansu Ma": ["Lanzhou", 103.83, 36.06], Germany: ["Berlin", 13.4, 52.52], Greece: ["Athens", 23.73, 37.98],
+  "Guangdong Clique": ["Canton", 113.26, 23.13], "Guangxi Clique": ["Nanning", 108.32, 22.82], Guatemala: ["Guatemala City", -90.51, 14.63],
+  Haiti: ["Port-au-Prince", -72.34, 18.54], "Hebei-Chahar": ["Peiping", 116.4, 39.9], Honduras: ["Tegucigalpa", -87.21, 14.07],
+  Hungary: ["Budapest", 19.04, 47.5], "Imperialist Japan": ["Tokyo", 139.69, 35.69], Iran: ["Tehran", 51.39, 35.69],
+  Iraq: ["Baghdad", 44.37, 33.31], Ireland: ["Dublin", -6.26, 53.35], Italy: ["Rome", 12.5, 41.9], "Khotan Ma": ["Khotan", 79.92, 37.11],
+  "Kuomintang China": ["Nanking", 118.8, 32.06], Latvia: ["Riga", 24.11, 56.95], Liberia: ["Monrovia", -10.8, 6.3],
+  Lithuania: ["Kaunas", 23.9, 54.9], Luxembourg: ["Luxembourg", 6.13, 49.61], Manchukuo: ["Hsinking", 125.32, 43.82],
+  "Mandatory Palestine": ["Jerusalem", 35.22, 31.77], Mengjiang: ["Kalgan", 114.88, 40.82], Mexico: ["Mexico City", -99.13, 19.43],
+  Mongolia: ["Ulan Bator", 106.92, 47.92], Nepal: ["Kathmandu", 85.32, 27.71], Netherlands: ["Amsterdam", 4.9, 52.37],
+  "New Zealand": ["Wellington", 174.78, -41.29], Nicaragua: ["Managua", -86.25, 12.13], "Ningxia Ma": ["Yinchuan", 106.27, 38.47],
+  "Northeastern Army": ["Xi'an", 108.94, 34.34], Norway: ["Oslo", 10.75, 59.91], Oman: ["Muscat", 58.41, 23.59],
+  Panama: ["Panama City", -79.52, 8.98], Paraguay: ["Asunción", -57.58, -25.26], Peru: ["Lima", -77.04, -12.05],
+  Philippines: ["Manila", 120.98, 14.6], Poland: ["Warsaw", 21.01, 52.23], Portugal: ["Lisbon", -9.14, 38.72],
+  "Qinghai Ma": ["Xining", 101.78, 36.62], Romania: ["Bucharest", 26.1, 44.43], "Saudi Arabia": ["Riyadh", 46.72, 24.69],
+  "Shandong Clique": ["Jinan", 117.0, 36.67], Shanxi: ["Taiyuan", 112.55, 37.87], Siam: ["Bangkok", 100.5, 13.76],
+  "Sichuan Clique": ["Chengdu", 104.07, 30.67], Sinkiang: ["Urumqi", 87.62, 43.83], "Soviet Union": ["Moscow", 37.62, 55.76],
+  Spain: ["Madrid", -3.7, 40.42], Sweden: ["Stockholm", 18.07, 59.33], Switzerland: ["Bern", 7.45, 46.95],
+  "Tangier International Zone": ["Tangier", -5.8, 35.77], "Tannu Tuva": ["Kyzyl", 94.45, 51.72], Tibet: ["Lhasa", 91.13, 29.65],
+  Turkey: ["Ankara", 32.85, 39.93], "United Kingdom": ["London", -0.13, 51.51], "United States": ["Washington", -77.04, 38.9],
+  Uruguay: ["Montevideo", -56.16, -34.9], Venezuela: ["Caracas", -66.9, 10.49], Yemen: ["Sana'a", 44.21, 15.35],
+  Yugoslavia: ["Belgrade", 20.46, 44.82], Yunnan: ["Kunming", 102.83, 24.88],
+});

@@ -144,6 +144,7 @@ const TASK_PROFILE_MAP = Object.freeze({
   diplomaticReply: CONTEXT_PROFILE_KEYS.DIPLOMACY,
   eventConsolidator: CONTEXT_PROFILE_KEYS.HISTORY,
   geographyResolver: CONTEXT_PROFILE_KEYS.MECHANICAL,
+  validatedNarration: CONTEXT_PROFILE_KEYS.MECHANICAL,
   timelineCurator: CONTEXT_PROFILE_KEYS.HISTORY,
   unitDirector: CONTEXT_PROFILE_KEYS.WAR,
   territoryDirector: CONTEXT_PROFILE_KEYS.MECHANICAL,
@@ -319,6 +320,7 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
   ]),
   eventConsolidator: Object.freeze(["actionsToConsolidate", "historyDocumentContext"]),
   geographyResolver: Object.freeze(["geographyResolverItems"]),
+  validatedNarration: Object.freeze(["narrationItems", "narrationRefusals"]),
   gameMaster: Object.freeze(["gameMasterMode", "territorialControlContext"]),
   idleDiplomacy: Object.freeze([
     "playerPolity",

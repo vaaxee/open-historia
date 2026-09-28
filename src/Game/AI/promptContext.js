@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import { describeCapitals, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { JSON_URLS, getNationTags, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -1555,6 +1556,14 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
       + (taggedCodes.length > 40 ? `\n(+${taggedCodes.length - 40} more tagged countries not listed)` : "");
   const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
 
+  // The capital of every polity (a world-map game only: runtime/worldmap/capitals.js),
+  // with who holds it now. A model that took Vilnius for Lithuania's capital
+  // narrated its "fall" and a surrender; Lithuania's capital was Kaunas.
+  const capitalsText = describeCapitals(
+    await loadWorldMapCapitals().catch(() => ({})),
+    (stateId) => world.regionOwnershipOverrides?.[stateId] ?? regionLookup.get(stateId)?.country ?? "",
+  );
+
   // The region vocabulary the jump prompt promises ("every ... region ... separated
   // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
   // so on a stock map the model saw ZERO region names and invented ones that then
@@ -1609,6 +1618,9 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     "Dynamic polity overrides:",
     politySummary,
     "",
+    ...(capitalsText
+      ? ["Capitals (the seat of each government; a capital changes only through an event that moves it):", capitalsText, ""]
+      : []),
     "What each country is (ideology, alignment, posture). Treat these as binding "
       + "characterisation: act, speak and react in keeping with them, and only change "
       + "them via polityChanges when events genuinely reshape a country.",

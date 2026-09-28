@@ -1985,6 +1985,10 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
+                    <Toggle label="Write the story after validation" enabled={mapSettings.narrateAfterValidation} onToggle={() => updateMapSetting("narrateAfterValidation", MAP_SETTING_KEYS.narrateAfterValidation, !mapSettings.narrateAfterValidation)} />
+                    <div style={settingsHelper}>
+                    On (default): once a time skip's answer is validated, one more request rewrites the events' titles and descriptions so that they say only what the engine actually applied — a capture, cession or surrender the engine refused is told as a failed attempt. Off: saves that request; the engine still rewrites a refused capture or surrender as an attempt on its own, more plainly.
+                    </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way, and Gemini arrives all at once regardless.
@@ -2199,6 +2203,8 @@ const SettingsMenu = ({
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
         // Ships ON too.
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
+        // Ships ON as well.
+        narrateAfterValidation: getMapSettingDefaultOn(MAP_SETTING_KEYS.narrateAfterValidation),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
     }));
 

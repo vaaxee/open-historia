@@ -96,6 +96,11 @@ import {
   HOI_TECH_TREE_TOOL,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
+import { canonicalizePayloadPolityNames } from "../../runtime/polityExonyms.js";
+import { guardRefusedTerritory } from "./claimGuard.js";
+import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
+import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
+import { applyNarration, buildNarrationItems, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, hashText, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
@@ -4899,6 +4904,23 @@ const resolveRegionTransfers = async (containers, world, {
     return "";
   };
 
+  // The losing side must hold the region, and a place the whole map knows is
+  // not re-read as one of the named side's regions (territoryOwnerCheck.js).
+  const ownerMismatch = createOwnerMismatchCheck({
+    canonicalOwnerKey,
+    ownerKeyOf,
+    ownerNameOf,
+    regionNameOf: (regionId) => byId.get(regionId)?.name ?? "",
+  });
+  const foreignPlace = createForeignPlaceFinder({
+    byName,
+    catalog,
+    regionKey,
+    matchExact: (label, pool) => matchRegionName(label, pool, { allowFuzzy: false, minSubstring: Number.POSITIVE_INFINITY }),
+    cities: cityAnchorContext?.cities ?? [],
+    containingRegionIds: containingRegionIdsForCity,
+  });
+
   const pushUniqueTransfer = (target, transfer) => {
     const id = normalizeString(transfer?.regionId);
     const toCode = regionKey(transfer?.toCode);
@@ -5054,6 +5076,16 @@ const resolveRegionTransfers = async (containers, world, {
           continue;
         }
 
+        // The losing side must hold the region. A model that takes "Vilnius" from
+        // Lithuania when the map gives it to Poland is told so, and the transfer is
+        // refused: never re-aimed at the real owner in silence (which would take
+        // Poland's land in a story about Lithuania), never swapped for a region the
+        // named side does hold.
+        const mismatch = ownerMismatch(transfer, regionId);
+        if (mismatch) {
+          unresolved.push({ ...mismatch, path, transferIndex });
+          continue;
+        }
         const row = byId.get(regionId);
         const normalized = {
           ...transfer,
@@ -5112,6 +5144,16 @@ const resolveRegionTransfers = async (containers, world, {
         transfer,
         transferIndex,
       };
+
+      // A place the whole map knows — a region, one of its aliases, or a city inside
+      // one — that the named losing side does not hold is an owner mismatch, not a
+      // name for the semantic resolver to map onto one of that side's regions.
+      const elsewhere = label && canonicalOwnerKey(transfer?.fromCode) ? foreignPlace(label) : "";
+      const misplaced = elsewhere ? ownerMismatch(transfer, elsewhere) : null;
+      if (misplaced) {
+        unresolved.push({ ...misplaced, path, transferIndex });
+        continue;
+      }
 
       // No losing-side region set means there is nothing bounded for the semantic
       // resolver to choose from. Do not hand it the whole planet and ask for vibes.
@@ -5546,7 +5588,7 @@ const validateExactApprovedRegionClaims = (containers) => {
 // currently owns, so a model that wrote "Pomerania" can resend the same answer
 // with the real names/ids ("Pomorskie (POL.11_1)") instead of losing the map
 // change entirely. The lists stay small — one owner's regions, not the world's.
-const buildTransferFeedback = (unresolved) => {
+export const buildTransferFeedback = (unresolved) => {
   const lines = [];
   for (const entry of unresolved.slice(0, 3)) {
     const target = entry.label || "(blank)";
@@ -5556,6 +5598,10 @@ const buildTransferFeedback = (unresolved) => {
           `Set fromCode to the losing polity's FULL current name and set regionId to that same polity name; ` +
           `do not put one province/colony in regionId for a whole-country operation.`,
       );
+      continue;
+    }
+    if (entry.ownerMismatch) {
+      lines.push(describeOwnerMismatchFeedback(entry));
       continue;
     }
     if (entry.unknownOwner) {
@@ -5689,7 +5735,16 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
 // place. buildTransferFeedback above is the in-turn version: it spends up to two
 // hundred region names on the one retry. By the next turn that vocabulary is a
 // lookup away, so the receipt only says what failed to land and why.
-const describeUnresolvedTerritory = (entry, family, eventTitle) => {
+// Why one territorial operation was refused, in a few words (claimGuard.js).
+const refusalReason = (entry) => {
+  if (entry?.ownerMismatch) return `${entry.ownerMismatch.regionName} belongs to ${entry.ownerMismatch.actualOwner}, not to ${normalizeString(entry.fromCode)}`;
+  if (entry?.unknownOwner) return `"${entry.unknownOwner}" is not a power on this map`;
+  if (entry?.kind === "narrated-city-coverage") return `no control operation targeted ${entry.cityName || entry.label}`;
+  const label = normalizeString(entry?.label);
+  return label ? `no map region matches "${label}"` : "";
+};
+
+export const describeUnresolvedTerritory = (entry, family, eventTitle) => {
   const where = eventTitle ? `Event "${eventTitle}": ` : "";
   const what = family === "regionControlOps" ? "control operation on" : "transfer of";
   const label = normalizeString(entry?.label) || "(blank)";
@@ -5702,6 +5757,7 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
   if (entry?.unknownOwner) {
     return `${where}the ${what} "${label}" was dropped — "${entry.unknownOwner}" is not a power on this map, and the side that loses land must be named exactly as the map spells it.`;
   }
+  if (entry?.ownerMismatch) return describeOwnerMismatchReceipt(entry, what, where);
   const owner = normalizeString(entry?.fromCode);
   return `${where}the ${what} "${label}" was dropped — no map region matches that name${owner ? ` among ${owner}'s regions` : ""}.`;
 };
@@ -5728,6 +5784,15 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       }];
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   const drop = (path, text) => noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`);
+
+  // Polity names first, everywhere in the payload: "Lituanie", "Royaume-Uni" or
+  // "Japon" become the map's exact "Lithuania", "United Kingdom", "Imperialist
+  // Japan" (runtime/polityExonyms.js). Before this, a name in the story's own
+  // language dropped the transfer, the war and the chats — and a receiver named
+  // that way founded a second country beside the real one.
+  for (const { from, to } of canonicalizePayloadPolityNames(candidate, normalizeWorldState(world))) {
+    noteReceipt(receipt, "adjusted", `"${from}" was read as "${to}", the map's name for that polity. Write polity names exactly as the map spells them.`);
+  }
 
   // A transfer or control flip that says its own basis is a claim, a threat or a
   // raid moves no border (runtime/territoryBasis.js). Never an error and never a
@@ -5780,6 +5845,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   for (const entry of unresolvedControlOps) {
     noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)));
+  }
+  // A story may not announce what the engine refused (claimGuard.js): an event
+  // whose territorial operations were refused, and whose text still says the land
+  // fell, was ceded or surrendered, is rewritten as an attempt; so is a
+  // capitulation with nothing behind it. Turn narration only — a Game Master edit
+  // (captureGuard false) is the administrator's own word.
+  if (captureGuard && Array.isArray(candidate?.events)) {
+    const refused = [...unresolvedTransfers, ...unresolvedControlOps];
+    for (const note of guardRefusedTerritory(containers, refused, { describe: refusalReason })) {
+      noteReceipt(receipt, "withheld", note);
+    }
   }
   // Units and structures placed by name (`at`), and everything placed kept clear
   // of what already stands (resolvePlacements above). Never an error: a place
@@ -6039,7 +6115,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         description:
           action.kind === "chat"
             ? `${bundle.game.country} opens a deliberate diplomatic channel tied to ${action.title.toLowerCase()}, forcing counterparts to weigh terms instead of guessing intent.`
-            : `${bundle.game.country} begins implementing ${action.title.toLowerCase()}, producing immediate administrative and political consequences that other powers start to notice.`,
+            : pendingOrderDescription(bundle.game.country, action.title),
         impacts: {
           createdChats:
             action.kind === "chat" && action.invitees.length > 0 && action.chatStarter
@@ -6062,7 +6138,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         title:
           action.kind === "chat"
             ? `${bundle.game.country} opens a diplomatic channel`
-            : `${bundle.game.country} acts on ${action.title.toLowerCase()}`,
+            : pendingOrderTitle(bundle.game.country),
       });
     });
   } else {
@@ -6085,13 +6161,17 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
 
   // No scene: a time skip no longer writes one (a skip offers an interactive
   // event instead, runtime/interactiveOffer.js).
+  // No AI reply means no order was played: the orders stay queued for the next
+  // turn (clearActions false) and nothing says they were carried out — a fallback
+  // turn that wrote "Finland cedes the Karelian Isthmus" as history had the next
+  // turns narrate a cession the map never saw.
   return {
-    clearActions: true,
+    clearActions: false,
     events,
     stopDate: targetDate,
     summary:
       plannedActions.length > 0
-        ? `${bundle.game.country} moves from planning into execution, and the world begins adjusting to the turn's most concrete orders.`
+        ? pendingOrdersSummary(bundle.game.country)
         : `Time advances without a direct order from ${bundle.game.country}, but the wider system keeps shifting and building pressure.`,
   };
 };
@@ -11943,6 +12023,16 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         }
       }
 
+      // The story after validation: the text is rewritten to match what the engine
+      // kept, with what it refused in this segment.
+      if (segmentGeneration?.source !== "fallback" && narrateAfterValidationEnabled()) {
+        const refusals = normalizeArray(segmentDraft?.notes)
+          .filter((note) => note?.kind === "dropped" || note?.kind === "withheld")
+          .map((note) => normalizeString(note?.text))
+          .filter(Boolean);
+        await narrateValidatedSegment(payload, { refusals, requests: state.requests, signal, receipt: state.receipt });
+      }
+
       screenSegmentPayload(payload, {
         analysis: worldInitiative.analysis,
         priorEvents: segmentBundle.events,
@@ -12035,6 +12125,43 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // Outside the try on purpose: nothing here may hold the turn as a failed
   // segment, and a repair never throws except on the player's Cancel.
   await repairSkipStorylineMotion({ context, state, signal });
+};
+
+// ---- The story after validation --------------------------------------------------
+//
+// Two-step narration (validatedNarration.js): once a segment's answer is
+// validated and its refused operations are out of it, one more request rewrites
+// the events' titles and descriptions to say only what the engine applied. On by
+// default (Settings → AI). The budget may refuse it while requests are saved, the
+// model may fail — either way the text stays as the guard left it (claimGuard.js).
+const narrateAfterValidationEnabled = () => getMapSettingDefaultOn(MAP_SETTING_KEYS.narrateAfterValidation);
+
+const narrateValidatedSegment = async (payload, { refusals = [], requests = null, signal = null, receipt = null } = {}) => {
+  const events = normalizeArray(payload?.events);
+  if (!events.length) return 0;
+  try {
+    const response = await runJsonTask("validatedNarration", {
+      fallback: () => ({ events: [] }),
+      signal,
+      ...jumpTaskOptions(requests, "narration"),
+      validatePayload: (candidate) => validateNarration(candidate, events.length),
+      userMessage: "Rewrite the supplied events' titles and descriptions so that they state only what the engine applied. Return exactly one entry per supplied index.",
+      variables: {
+        narrationItems: JSON.stringify(buildNarrationItems(events), null, 2),
+        narrationRefusals: refusals.length ? refusals.map((text) => `- ${text}`).join("\n") : "(nothing was refused)",
+      },
+    });
+    if (response?.generation?.source === "fallback") return 0;
+    const changed = applyNarration(events, response?.payload);
+    if (changed) {
+      noteReceipt(receipt, "adjusted", `${changed} event${changed === 1 ? " was" : "s were"} rewritten after validation so that the story says only what the engine applied.`);
+    }
+    return changed;
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    console.warn("[narration] the story after validation failed; the validated text stands.", error);
+    return 0;
+  }
 };
 
 // ---- What a time skip spends ---------------------------------------------------

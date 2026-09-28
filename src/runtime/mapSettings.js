@@ -69,6 +69,11 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // The story written after validation (AI/validatedNarration.js): once a
+    // skip's answer is validated, one more request rewrites the events' text to
+    // match what the engine actually applied. ON by default — read with
+    // getMapSettingDefaultOn. Off, the no-request guard (AI/claimGuard.js) holds alone.
+    narrateAfterValidation: "ai_narrate_after_validation",
 };
 
 // Families the label-font pickers suggest — Settings → Map and the game and
@@ -114,6 +119,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+    [MAP_SETTING_KEYS.narrateAfterValidation]: "Write the story after validation",
 };
 
 export function setMapSetting(key, value) {

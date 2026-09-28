@@ -204,6 +204,7 @@ export const AI_TASK_ROUTING = [
     { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
     { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
+    { key: "validatedNarration", label: "Story after validation", hint: "Mid-tier: rewrites a turn's text to match the map", group: "Simulation" },
     { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },

@@ -26,6 +26,8 @@ import fs from "fs";
 import path from "path";
 import { DATA_DIR } from "../../server/dataDir.js";
 import { N, cellOf } from "./lib/grid.mjs";
+import { PERIOD_ALIASES_1936 } from "./aliases-1936.mjs";
+import { CAPITALS_1936 } from "./capitals-1936.mjs";
 import { FLAGS_1936 } from "./flags-1936.mjs";
 import { GUIDES_1936, GUIDES_1936_ADMIN1 } from "./guides-1936.mjs";
 
@@ -283,14 +285,13 @@ for (const [state, info] of Object.entries(stateInfo)) {
     taken.add(final);
     // Les autres noms d'un état des compléments 1936 (« Danzig » pour Gdańsk),
     // pour que l'IA le trouve sous le nom de l'époque.
-    const aliases = [...new Set(members.get(state).map((k) => EXTRA_ALIASES[extra[k + 1]]).filter(Boolean).flat())].filter((n) => n !== final);
+    // …et les noms de 1936 de l'état ou de ses villes (aliases-1936.mjs : Vilnius → Wilno).
+    const period = [base.get(state), ...members.get(state).map((k) => provinces[k].city)].filter(Boolean).flatMap((n) => PERIOD_ALIASES_1936[n] ?? []);
+    const aliases = [...new Set([...members.get(state).map((k) => EXTRA_ALIASES[extra[k + 1]]).filter(Boolean).flat(), ...period])].filter((n) => n !== final);
     stateInfo[state] = { ...(stateInfo[state] ?? {}), name: final, provinces: members.get(state).length, ...(aliases.length ? { aliases } : {}) };
   }
 }
 
-fs.writeFileSync(outFile, JSON.stringify({
-  ...raw, correctedTo: "1936-01-01", correctedAt: new Date().toISOString(), owners, states, stateInfo, stateOwners, newOwners: NEW_OWNERS,
-}));
 
 // ---------------------------------------------------------------------------
 // Rapport : les points de contrôle, puis toutes les différences en Europe et
@@ -308,6 +309,24 @@ const at = (lng, lat) => {
   }
   return 0;
 };
+// Les capitales de 1936 (capitals-1936.mjs) : chacune doit tomber dans un état
+// de son pays. Écrites avec leur état, pour que l'IA sache laquelle prendre.
+const capitals = {};
+const capitalErrors = [];
+for (const [polity, [city, lng, lat]] of Object.entries(CAPITALS_1936)) {
+  const id = at(lng, lat);
+  const owner = id ? owners[id - 1] : "";
+  if (owner !== polity) { capitalErrors.push(`${polity} : ${city} tombe chez « ${owner || "(mer)"} »`); continue; }
+  capitals[polity] = { city, state: states[id - 1], stateName: stateInfo[states[id - 1]]?.name ?? "", province: id };
+}
+const polities = new Set(owners.filter(Boolean));
+const withoutCapital = [...polities].filter((p) => !capitals[p]).sort();
+
+fs.writeFileSync(outFile, JSON.stringify({
+  ...raw, correctedTo: "1936-01-01", correctedAt: new Date().toISOString(), owners, states, stateInfo, stateOwners, newOwners: NEW_OWNERS, capitals,
+}));
+console.log(`Capitales : ${Object.keys(capitals).length} placées, ${capitalErrors.length} hors de leur pays${capitalErrors.length ? ` (${capitalErrors.join(" ; ")})` : ""}, ${withoutCapital.length} pays sans capitale${withoutCapital.length ? ` (${withoutCapital.join(", ")})` : ""}`);
+
 const CHECKS = [
   ["Allemagne", [["Stettin", 14.55, 53.43, "Germany"], ["Köslin", 16.18, 54.19, "Germany"], ["Breslau", 17.04, 51.11, "Germany"], ["Oppeln", 17.93, 50.67, "Germany"],
     ["Königsberg", 20.5, 54.7, "Germany"], ["Allenstein", 20.48, 53.78, "Germany"], ["Marienwerder", 18.93, 53.73, "Germany"], ["Sarrebruck", 7.0, 49.23, "Germany"], ["Cologne (Rhénanie)", 6.96, 50.94, "Germany"],

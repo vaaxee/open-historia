@@ -70,6 +70,17 @@ export const registerWorldMapRoutes = (app) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     return fs.createReadStream(file).pipe(res);
   });
+  // Les capitales du scénario de la partie (provinces.v1.json, capitals), pour
+  // l'IA ; vide hors d'une partie sur la carte mondiale.
+  app.get("/api/worldmap/capitals", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const file = activeGameWorldMapFile();
+    let capitals = {};
+    try {
+      if (file) capitals = JSON.parse(fs.readFileSync(file, "utf8"))?.capitals ?? {};
+    } catch { /* un fichier illisible : pas de capitales */ }
+    res.json({ capitals });
+  });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...worldMapStatus(), game: Boolean(activeGameWorldMapFile()) });
