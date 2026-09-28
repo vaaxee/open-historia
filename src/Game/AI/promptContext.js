@@ -1,5 +1,7 @@
 import dayjs from "dayjs";
 import { describeCapitals, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
+import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
+import { describeWarRules } from "../../runtime/worldmap/warRules.js";
 import { JSON_URLS, getNationTags, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
@@ -1563,6 +1565,9 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     await loadWorldMapCapitals().catch(() => ({})),
     (stateId) => world.regionOwnershipOverrides?.[stateId] ?? regionLookup.get(stateId)?.country ?? "",
   );
+  // The world map's war rules and the capitulations on record (warRules.js):
+  // the engine enforces them, so the model is told them up front.
+  const warRulesText = (await isWorldMapGame().catch(() => false)) ? describeWarRules(world) : "";
 
   // The region vocabulary the jump prompt promises ("every ... region ... separated
   // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
@@ -1621,6 +1626,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     ...(capitalsText
       ? ["Capitals (the seat of each government; a capital changes only through an event that moves it):", capitalsText, ""]
       : []),
+    ...(warRulesText ? ["War on this map (the engine enforces these rules; what breaks them is refused):", warRulesText, ""] : []),
     "What each country is (ideology, alignment, posture). Treat these as binding "
       + "characterisation: act, speak and react in keeping with them, and only change "
       + "them via polityChanges when events genuinely reshape a country.",

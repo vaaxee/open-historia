@@ -98,6 +98,10 @@ export const enemiesOf = (wars, a) => {
   return [...out];
 };
 
+// The key a front's count is kept under (attacker → defender), for the rule and
+// for whoever counts what an answer took.
+export const frontKey = (attacker, defender) => `${key(attacker)}>${key(defender)}`;
+
 // How many states a front may take in a period: OCCUPATIONS_PER_WEEK a week, at least one.
 export const occupationAllowance = (spanDays) => Math.max(1, Math.ceil((OCCUPATIONS_PER_WEEK * Math.max(1, Number(spanDays) || 7)) / 7));
 
@@ -122,8 +126,7 @@ export const checkControlOperation = ({ op, wars, map, taken, allowance }) => {
     return `${map.nameOf(stateId)} does not border any state ${attacker} or its allies hold, and none of their units stands in or next to it: the front advances state by state`;
   }
   if (kind === "control") {
-    const pair = `${key(attacker)}>${key(defender)}`;
-    if ((taken.get(pair) ?? 0) >= allowance) {
+    if ((taken.get(frontKey(attacker, defender)) ?? 0) >= allowance) {
       return `the front between ${attacker} and ${defender} has already moved ${allowance} state${allowance === 1 ? "" : "s"} this period`;
     }
   }

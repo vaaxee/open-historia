@@ -97,7 +97,7 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { canonicalizePayloadPolityNames, mentionedPolities } from "../../runtime/polityExonyms.js";
-import { guardRefusedTerritory } from "./claimGuard.js";
+import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
 import { planPlayerWars } from "./playerWarOrders.js";
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
@@ -106,8 +106,8 @@ import {
   capitulationRecord,
   checkControlOperation,
   checkLegalTransfer,
-  describeWarRules,
   findCapitulations,
+  frontKey,
   occupationAllowance,
   warsFor,
 } from "../../runtime/worldmap/warRules.js";
@@ -3625,6 +3625,38 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
 // renders a turn from exactly that list, so anything added to or taken out of
 // the turn after the record was built (espionage's events, an unbacked
 // provisional event) has to be reflected here too.
+// The engine's capitulations on one turn's world (runtime/worldmap/warRules.js):
+// each adds its event to `events` (in place, like espionage's), takes the polity
+// out of its wars and records it in world.capitulations. Returns the new world
+// and the events' ids.
+const applyEngineCapitulations = (world, { events, capitals = {}, date = "", round = 0 } = {}) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!catalog.length) return { world, eventIds: [] };
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  let next = world;
+  const controllerOf = (id) => normalizeString(next.regionOwnershipOverrides?.[id]) || normalizeString(byId.get(id)?.country);
+  const map = {
+    states: () => [...byId.keys()],
+    controllerOf,
+    sovereignOf: (id) => normalizeString(next.regionSovereigntyOverrides?.[id]) || controllerOf(id),
+  };
+  const found = findCapitulations({ world: next, capitals, map });
+  const language = detectLanguage(normalizeArray(events).map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
+  const eventIds = [];
+  for (const capitulation of found) {
+    const id = `engine-capitulation-${round}-${normalizeArray(events).length + 1}`;
+    const entry = normalizeEventEntry(capitulationEvent(capitulation, { date, language, id }), events.length);
+    if (!entry) continue;
+    events.push(entry);
+    eventIds.push(entry.id);
+    const { record, warUpdates } = capitulationRecord(capitulation, { date, eventId: entry.id });
+    next = applyWarUpdates({ world: next, updates: warUpdates, events, stopDate: date, round }).world;
+    next = { ...next, capitulations: [...normalizeArray(next.capitulations), record] };
+    logDebugEvent("turn", `${capitulation.polity} capitulated (capital ${capitulation.capital || "?"}, ${capitulation.occupied}/${capitulation.total} states occupied).`);
+  }
+  return { world: next, eventIds };
+};
+
 const withLatestTurnEventIds = (world, rewrite) => {
   const [turnEntry, ...olderTurns] = normalizeArray(world?.simulationHistory);
   if (!turnEntry) return world;
@@ -5854,7 +5886,7 @@ const enforceWarRules = (containers, candidate, world, { playerPolity = "", span
       }
       if (normalizeString(op?.op).toLowerCase() === "control") {
         const id = normalizeString(op.regionId);
-        const pair = `${normalizeString(op.toCode).toLowerCase()}>${map.controllerOf(id).toLowerCase()}`;
+        const pair = frontKey(op.toCode, map.controllerOf(id));
         taken.set(pair, (taken.get(pair) ?? 0) + 1);
         // The lawful sovereign stays; the state is now held by the attacker.
         if (!sovereign.has(id)) sovereign.set(id, map.sovereignOf(id));
@@ -7122,6 +7154,23 @@ const applySimulationResult = async ({
     round: nextGame.round,
   });
   worldWithImpacts = diplomaticMerge.world;
+  // Capitulation is declared by the engine, never by the story (world-map games,
+  // runtime/worldmap/warRules.js): on the world this turn produced, a polity at
+  // war whose capital an enemy holds and that lost a third of its states
+  // capitulates — the engine writes the event, takes it out of its wars and
+  // records it, so its winners may now annex what they occupy.
+  if (await isWorldMapGame().catch(() => false)) {
+    const capitulated = applyEngineCapitulations(worldWithImpacts, {
+      events: freshEvents,
+      capitals: await loadWorldMapCapitals().catch(() => ({})),
+      date: nextGame.gameDate,
+      round: nextGame.round,
+    });
+    worldWithImpacts = capitulated.world;
+    if (capitulated.eventIds.length) {
+      worldWithImpacts = withLatestTurnEventIds(worldWithImpacts, (ids) => [...ids, ...capitulated.eventIds]);
+    }
+  }
   // Storylines last: they read the wars and relations as this turn left them.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,

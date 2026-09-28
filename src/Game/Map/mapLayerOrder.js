@@ -39,6 +39,8 @@ export const MAP_LAYER_ORDER = [
   // politique quand elle est active ; les noms et les objets restent au-dessus.
   "worldmap-sea",
   "worldmap-fill",
+  // Occupied states, hatched in their lawful sovereign's colour over the occupier's.
+  "worldmap-occupation",
   "worldmap-province-lines",
   "worldmap-country-borders",
 

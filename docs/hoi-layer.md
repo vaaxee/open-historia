@@ -278,6 +278,23 @@ Constat de départ (partie de test, janvier 1936) : l'IA écrivait « Lituanie �
 5. **Garde-fou sans requête** (`src/Game/AI/claimGuard.js`) : un événement dont les opérations territoriales ont été refusées et qui annonce une prise, une chute, une annexion, une cession ou une capitulation (anglais, français, allemand, espagnol, italien) est réécrit en tentative par le moteur, dans sa langue ; enacté en partie, il garde son texte et le moteur ajoute quelle partie n'a pas eu lieu ; une capitulation sans aucune opération est aussi réécrite. Le reçu du tour suivant dit « This did NOT happen ». Pas pour les éditions du maître du jeu.
 6. **Récit après validation** (`src/Game/AI/validatedNarration.js`, tâche `validatedNarration`) : une fois un segment validé, une requête de plus réécrit les titres et descriptions à partir de ce que le moteur a appliqué et de ce qu'il a refusé ; rien d'autre ne change, et une réécriture qui ferait annoncer une prise sans opération derrière est refusée. Réglage « Write the story after validation » (Réglages → IA), activé par défaut ; il passe par le budget de requêtes du saut.
 
+Après le test de la partie F :
+
+- **Revendications** (`src/Game/AI/claimHolderCheck.js`) : chaque revendication porte le nom et le propriétaire de sa région ; un récit qui fait réagir un voisin comme si la région était la sienne, sans nommer son vrai propriétaire, est relancé avec le propriétaire indiqué.
+- **Aucun code de région** dans un texte : le narrateur ne reçoit que des noms, et tout code restant est remplacé par le nom de la région (`scrubRegionCodes`). Les phrases du garde-fou sont de la prose simple ; les raisons techniques vont au reçu.
+- **Guerre du joueur** (`src/Game/AI/playerWarOrders.js`) : un ordre qui déclare la guerre à un pays connu, absente du monde et de la réponse, est exécuté par le moteur (événement rattaché à l'ordre) ; un ordre sans pays identifiable est refusé dans le reçu.
+
+### Phase 6, étape 2 : la guerre état par état (parties sur la carte mondiale)
+
+Règles du moteur (`src/runtime/worldmap/warRules.js`), pour les tours simulés d'une partie sur la carte mondiale (`gameMode.js`), jamais pour les éditions du maître du jeu :
+
+1. **Guerre déclarée** : un contrôle par la force (`regionControlOps` control ou contest) exige une guerre active entre l'attaquant et le contrôleur de l'état.
+2. **Occupation état par état** : l'état visé touche un état tenu par l'attaquant ou ses alliés, ou une de leurs unités s'y trouve ou à côté ; au plus 3 états par semaine sur chaque front. L'occupation change le contrôleur, jamais le souverain légal ; la carte hachure l'état occupé de la couleur de son souverain (`src/Game/Map/occupationHatch.js`, couche `worldmap-occupation`).
+3. **Capitulation par le moteur** : un pays en guerre dont la capitale est tenue par un ennemi et qui a perdu au moins un tiers de ses états capitule ; le moteur écrit l'événement, le sort de ses guerres et l'inscrit dans `world.capitulations`.
+4. **Souveraineté par traité ou après capitulation** : un transfert légal exige un traité entre les deux (accord `peace_settlement` ou `other`), l'ordre du joueur pour sa propre terre, ou la capitulation du perdant pour un état tenu par le camp vainqueur.
+
+Ce qui enfreint les règles est retiré de la réponse, noté dans le reçu (« It did NOT change hands ») et fait réécrire le récit en tentative. Les règles et les capitulations sont données à l'IA dans le résumé du monde.
+
 ### Sources et licences
 
 | Source | Usage | Licence |

@@ -19,7 +19,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
-import { getNationColors } from "../../runtime/assets.js";
+import { JSON_URLS, getNationColors, readJson } from "../../runtime/assets.js";
+import { cssColourToRgb, hatchPixels, occupationFeatures, occupiedStates } from "./occupationHatch.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import {
   BORDER_KIND, arcKind, changedProvinces, provinceOwners, todayColour,
@@ -55,6 +56,8 @@ const hashedColour = (owner) => {
 };
 
 const selectOverrides = (world) => world?.regionOwnershipOverrides ?? null;
+const selectSovereignty = (world) => world?.regionSovereigntyOverrides ?? null;
+const EMPTY_COLLECTION = Object.freeze({ type: "FeatureCollection", features: [] });
 
 const WorldMapLayer = () => {
   const { current: mapRef } = useMap();
@@ -62,7 +65,37 @@ const WorldMapLayer = () => {
   const [mode, setMode] = useState(worldMapPreviewMode);
   const [data, setData] = useState(null);
   const overrides = useRuntimeState("world", selectOverrides);
+  const sovereignty = useRuntimeState("world", selectSovereignty);
+  const [statesGeojson, setStatesGeojson] = useState(null);
   const applied = useRef({ owners: null, source: null });
+
+  // The states' outlines (the game's regions are the world map's states), for the
+  // hatching of occupied states. Loaded only once something is occupied.
+  const occupied = useMemo(
+    () => (data?.useOverrides ? occupiedStates({ sovereignty: sovereignty ?? {}, ownership: overrides ?? {}, stateOwners: data.scenario?.stateOwners ?? {} }) : []),
+    [data, sovereignty, overrides],
+  );
+  useEffect(() => {
+    if (!occupied.length || statesGeojson) return undefined;
+    let alive = true;
+    readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false })
+      .then((geojson) => { if (alive && geojson) setStatesGeojson(geojson); })
+      .catch((error) => console.warn("Carte mondiale : contours des états indisponibles pour les hachures :", error));
+    return () => { alive = false; };
+  }, [occupied.length, statesGeojson]);
+  const occupation = useMemo(
+    () => (occupied.length && statesGeojson ? { type: "FeatureCollection", features: occupationFeatures(occupied, statesGeojson) } : EMPTY_COLLECTION),
+    [occupied, statesGeojson],
+  );
+  // One stripe image per sovereign, in its colour.
+  useEffect(() => {
+    if (!map || !data || !occupation.features.length) return;
+    for (const feature of occupation.features) {
+      const { pattern, sovereign } = feature.properties;
+      if (map.hasImage?.(pattern)) continue;
+      map.addImage(pattern, { width: 16, height: 16, data: hatchPixels(cssColourToRgb(data.colourOf(sovereign))) });
+    }
+  }, [map, data, occupation]);
 
   // La partie se joue-t-elle sur la carte mondiale ?
   useEffect(() => {
@@ -181,6 +214,11 @@ const WorldMapLayer = () => {
           "line-opacity": ["case", ["==", ["feature-state", "kind"], BORDER_KIND.country], 1, 0],
         }}
       />
+    </Source>
+    {/* Occupied states: stripes in the lawful sovereign's colour over the occupier's
+        (occupationHatch.js). The layer order puts them under the borders. */}
+    <Source id="worldmap-occupation-source" type="geojson" data={occupation}>
+      <Layer id="worldmap-occupation" type="fill" paint={{ "fill-pattern": ["get", "pattern"], "fill-antialias": false }} />
     </Source>
     </>
   );
