@@ -81,6 +81,22 @@ export const registerWorldMapRoutes = (app) => {
     } catch { /* un fichier illisible : pas de capitales */ }
     res.json({ capitals });
   });
+  // Phase 7.2 : ce que le ravitaillement sait de chaque état du scénario de la
+  // partie (terrain, côte, voies ferrées), écrit par scripts/worldmap/supply-states.mjs.
+  // Vide hors d'une partie sur la carte mondiale, ou tant que le fichier manque.
+  app.get("/api/worldmap/supply", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const file = activeGameWorldMapFile();
+    let states = {};
+    try {
+      if (file) {
+        const scenarioId = path.basename(path.dirname(file));
+        const supply = path.join(WORLD_MAP_DIR, `supply-${scenarioId}.json`);
+        if (fs.existsSync(supply)) states = JSON.parse(fs.readFileSync(supply, "utf8"))?.states ?? {};
+      }
+    } catch { /* un fichier illisible : pas de données de ravitaillement */ }
+    res.json({ states });
+  });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...worldMapStatus(), game: Boolean(activeGameWorldMapFile()) });

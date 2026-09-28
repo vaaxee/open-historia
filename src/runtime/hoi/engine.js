@@ -36,7 +36,7 @@
 
 import { addGameDays, compareGameDates, diffGameDays } from "../gameDates.js";
 import { advanceResearch, emptyResearchReport, normalizeBonuses, normalizeResearch } from "./research.js";
-import { advanceArmy, templatesFor } from "./armies.js";
+import { advanceArmy, intendance, templatesFor } from "./armies.js";
 import {
   HOI_BUILDING_TYPES,
   advanceConstruction,
@@ -322,7 +322,7 @@ export const refreshBuildingBonuses = (world) => {
 // Inerte sans world.hoi ou sans jours écoulés.
 // `player` : le pays du joueur. Le moteur choisit les recherches et les chantiers
 // de tous les autres ; les siens, c'est le joueur qui les choisit (panneaux).
-export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) => {
+export const advanceHoiLayer = (world, { fromDate, toDate, player = "", supplyFor = null } = {}) => {
   if (!isObject(world) || !isObject(world.hoi)) return world;
   const days = diffGameDays(fromDate, toDate);
   if (!(days > 0)) return world;
@@ -405,12 +405,21 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
   // Phase 7.1 : les armées (armies.js), là où la partie en a. Ce que les lignes
   // ont sorti entre dans la réserve ; les divisions s'usent, se reposent et se
   // complètent. Une partie sans world.hoi.armies ne change pas.
+  // Phase 7.2 : l'intendance (usines civiles) fournit les « fournitures », et
+  // `supplyFor(polity)` (l'appelant, qui connaît la carte : supply.js) dit ce qui
+  // arrive dans chaque état.
   let armies = world.hoi.armies;
   if (isObject(armies)) {
     const templates = templatesFor(world.hoi.series);
     armies = { ...armies };
     for (const [polity, army] of Object.entries(armies)) {
-      const advanced = advanceArmy(army, days, { produced: reports[polity]?.produced ?? {}, templates });
+      const produced = { ...(reports[polity]?.produced ?? {}) };
+      if (nations[polity]) {
+        const civilian = effectiveFactories(nations[polity], nations[polity].buildingBonus).civilian;
+        produced.fournitures = Math.round((num(produced.fournitures) + intendance(civilian, days)) * 100) / 100;
+      }
+      const supply = typeof supplyFor === "function" ? supplyFor(polity) : null;
+      const advanced = advanceArmy(army, days, { produced, templates, supply });
       armies[polity] = advanced.army;
       if (reports[polity]) reports[polity] = { ...reports[polity], army: advanced.report };
     }

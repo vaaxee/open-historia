@@ -30,6 +30,8 @@
 //   }
 // }
 
+import { SUPPLY_TUNING, applySupply } from "./supply.js";
+
 export const ARMY_TUNING = Object.freeze({
   daysPerMonth: 30,
   // Usure de l'équipement d'une division, par mois, hors combat.
@@ -89,8 +91,19 @@ export const normalizeDivision = (value, index = 0) => {
     stateId: clean(value.stateId),
     frontId: clean(value.frontId),
     createdDate: clean(value.createdDate),
+    // Phase 7.2 (supply.js) : le ravitaillement reçu au dernier saut, 0 → 1, et
+    // depuis combien de jours la division est encerclée.
+    supply: round2(clamp(num(value.supply, 1), 0, 1)),
+    encircledDays: Math.max(0, Math.round(num(value.encircledDays))),
   };
 };
+
+// Phase 7.2 : l'intendance. Les usines civiles d'un pays fournissent chaque mois
+// de quoi ravitailler ses troupes (« fournitures »), en plus de ce qu'une ligne
+// dédiée produirait.
+export const SUPPLIES_PER_CIVILIAN_FACTORY_PER_MONTH = 25;
+export const intendance = (civilianFactories, days) =>
+  round2(Math.max(0, num(civilianFactories)) * SUPPLIES_PER_CIVILIAN_FACTORY_PER_MONTH * (days / ARMY_TUNING.daysPerMonth));
 
 export const normalizeArmy = (value) => {
   const source = isObject(value) ? value : {};
@@ -140,8 +153,10 @@ export const reinforceArmy = (army, templates) => {
   const stockpile = { ...army.stockpile };
   let available = army.manpower.available;
   const reinforced = [];
+  // Une division encerclée ou sans ravitaillement ne reçoit rien (supply.js).
   const order = army.divisions
     .map((division, index) => ({ division, index, strength: divisionStrength(division, templates[division.template]).overall }))
+    .filter(({ division }) => !(division.encircledDays > 0) && num(division.supply, 1) > 0)
     .sort((a, b) => a.strength - b.strength || a.index - b.index);
   const divisions = [...army.divisions];
   for (const { division, index } of order) {
@@ -183,8 +198,11 @@ export const upkeepArmy = (army, days, templates) => {
       if (lost > 0) worn[item] = round2(num(worn[item]) + lost);
     }
     const strength = divisionStrength({ ...division, equipment }, templates[division.template]).overall;
-    const ceiling = 100 * Math.max(0.2, strength);
-    const organisation = division.organisation < ceiling
+    // Mal ravitaillée, elle ne se réorganise pas au-delà de ce qui lui arrive.
+    const ceiling = 100 * Math.max(0.2, strength) * Math.max(0.1, num(division.supply, 1));
+    // Encerclée, elle ne se repose pas (supply.js lui en fait perdre).
+    const resting = !(division.encircledDays > 0);
+    const organisation = resting && division.organisation < ceiling
       ? Math.min(ceiling, division.organisation + T.organisationPerDay * days * Math.max(0.2, strength))
       : Math.min(division.organisation, 100);
     const gap = T.restingMorale - division.morale;
@@ -196,12 +214,18 @@ export const upkeepArmy = (army, days, templates) => {
 
 // Un saut : la production entre en réserve, la main-d'œuvre se renouvelle, les
 // divisions s'usent puis se complètent. Pur : renvoie l'armée et son rapport.
-export const advanceArmy = (input, days, { produced = {}, templates = templatesFor("1936") } = {}) => {
+// Phase 7.2 : `supply` (Map id d'état → { level, encircled }, supply.js) donne à
+// chaque division son ravitaillement avant l'usure et le remplissage ; absent,
+// les divisions sont ravitaillées depuis la réserve seule.
+export const advanceArmy = (input, days, { produced = {}, templates = templatesFor("1936"), supply = null } = {}) => {
   let army = normalizeArmy(input);
-  const report = { deposited: positiveMap(produced), worn: {}, reinforced: [], manpower: army.manpower.available };
+  const report = { deposited: positiveMap(produced), worn: {}, reinforced: [], manpower: army.manpower.available, supply: null };
   if (!(days > 0)) return { army, report };
   army = depositProduction(army, produced);
   army = growManpower(army, days);
+  const supplied = applySupply(army, supply, days, templates);
+  army = supplied.army;
+  report.supply = supplied.report;
   const upkeep = upkeepArmy(army, days, templates);
   army = upkeep.army;
   report.worn = upkeep.worn;
@@ -310,6 +334,8 @@ export const seedArmy = (polity, { series = "1936", stateId = "", date = "" } = 
         createdDate: date,
       }, divisions.length));
       for (const [item, need] of Object.entries(spec.equipment)) stockpile[item] = round2(num(stockpile[item]) + need * 0.1);
+      // Deux mois de fournitures d'avance (7.2).
+      stockpile.fournitures = round2(num(stockpile.fournitures) + (SUPPLY_TUNING.suppliesPerMonth[spec.kind] ?? 0) * 2);
     }
   }
   return normalizeArmy({ stockpile, manpower: { available: preset.manpower, growthPerMonth: preset.growthPerMonth }, divisions });

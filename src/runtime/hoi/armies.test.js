@@ -48,8 +48,9 @@ test("what the lines made goes into the stockpile, and fills the weakest divisio
     manpower: { available: 4000, growthPerMonth: 0 },
     divisions: [infantry(0.9, { id: "strong" }), infantry(0.5, { id: "weak" })],
   });
-  const { army: after, report } = advanceArmy(army, 30, { produced: { fusils: 100, artillerie: 2 }, templates: T36 });
-  assert.deepEqual(report.deposited, { fusils: 100, artillerie: 2 });
+  // Fournitures of their own (7.2): an unsupplied division is not refilled.
+  const { army: after, report } = advanceArmy(army, 30, { produced: { fusils: 100, artillerie: 2, fournitures: 50 }, templates: T36 });
+  assert.deepEqual(report.deposited, { fusils: 100, artillerie: 2, fournitures: 50 });
   const weak = after.divisions.find((d) => d.id === "weak");
   const strong = after.divisions.find((d) => d.id === "strong");
   assert.equal(weak.men, 9000, "4 000 men went to the weakest first");

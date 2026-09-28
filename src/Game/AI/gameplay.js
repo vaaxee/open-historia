@@ -123,6 +123,8 @@ import {
 } from "../../runtime/worldmap/warRules.js";
 import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
 import { fixCapitalMisnaming, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
+import { buildSupplyFor } from "../../runtime/worldmap/supplyMap.js";
+import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
 import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -6021,6 +6023,28 @@ const checkClaimsAgainstHolders = (containers, world) => {
 // event order: each control operation and legal transfer is checked against the
 // world as the earlier ones in this answer left it, and what the rules refuse is
 // taken out of the impacts and returned ({ path, family, label, warRule }).
+// Phase 7.2 : la carte de ravitaillement de chaque pays pour ce tour
+// (runtime/worldmap/supplyMap.js), ou null hors de la carte mondiale, sans armées
+// ou sans données (le moteur ravitaille alors depuis la réserve seule).
+const supplyForTurn = async (world) => {
+  try {
+    if (!world?.hoi?.armies || !(await isWorldMapGame())) return null;
+    const info = await loadWorldMapSupply();
+    const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+    if (!Object.keys(info).length || !catalog.length) return null;
+    const capitals = await loadWorldMapCapitals().catch(() => ({}));
+    let stateAt = () => "";
+    try {
+      const gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+      stateAt = (lng, lat) => (Number.isFinite(lng) && Number.isFinite(lat) ? gazetteer.regionAt([lng, lat])?.id ?? "" : "");
+    } catch { /* sans géométrie, dépôts et ports ne comptent que par leur regionId */ }
+    return buildSupplyFor({ world, catalog, info, capitals, stateAt });
+  } catch (error) {
+    console.warn("[supply] the supply map could not be built; divisions draw on their stockpile only.", error);
+    return null;
+  }
+};
+
 // Does a state touch the sea? Read off the map's geometry once asked, and
 // remembered (unitEntry.js touchesSea). Null when the map cannot be read.
 const coastLookup = async (world) => {
@@ -7309,6 +7333,9 @@ const applySimulationResult = async ({
     toDate: nextGame.gameDate,
     // Le moteur choisit la recherche de tous les pays, sauf celle du joueur.
     player: toCountryName(normalizeString(baseGame.country)),
+    // Phase 7.2 : ce qui arrive aux divisions, état par état (supplyMap.js), sur
+    // la carte mondiale et pour une partie qui a des armées.
+    supplyFor: await supplyForTurn(impactedWorld),
   });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
