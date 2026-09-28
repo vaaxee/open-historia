@@ -99,6 +99,18 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { canonicalizePayloadPolityNames } from "../../runtime/polityExonyms.js";
 import { guardRefusedTerritory } from "./claimGuard.js";
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
+import {
+  capitulationEvent,
+  capitulationRecord,
+  checkControlOperation,
+  checkLegalTransfer,
+  describeWarRules,
+  findCapitulations,
+  occupationAllowance,
+  warsFor,
+} from "../../runtime/worldmap/warRules.js";
+import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
+import { loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
 import { applyNarration, buildNarrationItems, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -5735,8 +5747,79 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
 // place. buildTransferFeedback above is the in-turn version: it spends up to two
 // hundred region names on the one retry. By the next turn that vocabulary is a
 // lookup away, so the receipt only says what failed to land and why.
+// The world map's war rules over one answer (runtime/worldmap/warRules.js), in
+// event order: each control operation and legal transfer is checked against the
+// world as the earlier ones in this answer left it, and what the rules refuse is
+// taken out of the impacts and returned ({ path, family, label, warRule }).
+const enforceWarRules = (containers, candidate, world, { playerPolity = "", spanDays = 7 } = {}) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!catalog.length) return [];
+  const worldState = normalizeWorldState(world);
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  const controller = new Map(Object.entries(worldState.regionOwnershipOverrides ?? {}));
+  const sovereign = new Map(Object.entries(worldState.regionSovereigntyOverrides ?? {}));
+  const unitOwners = new Map();
+  const addUnit = (regionId, owner) => {
+    const id = normalizeString(regionId);
+    if (!id || !normalizeString(owner)) return;
+    if (!unitOwners.has(id)) unitOwners.set(id, []);
+    unitOwners.get(id).push(normalizeString(owner));
+  };
+  for (const unit of normalizeArray(worldState.units)) addUnit(unit?.regionId, unit?.ownerCode);
+  const map = {
+    controllerOf: (id) => normalizeString(controller.get(id)) || normalizeString(byId.get(id)?.country),
+    sovereignOf: (id) => normalizeString(sovereign.get(id)) || normalizeString(controller.get(id)) || normalizeString(byId.get(id)?.country),
+    neighboursOf: (id) => normalizeArray(byId.get(id)?.adjacencies),
+    unitOwnersIn: (id) => unitOwners.get(id) ?? [],
+    nameOf: (id) => normalizeString(byId.get(id)?.name) || id,
+  };
+  const wars = warsFor(worldState, decodeWarUpdates(candidate?.warUpdates));
+  const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
+  const allowance = occupationAllowance(spanDays);
+  const taken = new Map();
+  const refused = [];
+  for (const { impacts, path } of containers) {
+    if (!impacts || typeof impacts !== "object") continue;
+    // This event's own units stand where it puts them before its fronts move.
+    for (const op of normalizeArray(impacts.unitOps)) addUnit(op?.regionId ?? op?.unit?.regionId, op?.unit?.ownerCode ?? op?.ownerCode);
+    const keptOps = [];
+    for (const op of normalizeArray(impacts.regionControlOps)) {
+      const reason = checkControlOperation({ op, wars, map, taken, allowance });
+      if (reason) {
+        refused.push({ path, family: "regionControlOps", label: normalizeString(op?.regionName) || map.nameOf(normalizeString(op?.regionId)), warRule: reason });
+        continue;
+      }
+      if (normalizeString(op?.op).toLowerCase() === "control") {
+        const id = normalizeString(op.regionId);
+        const pair = `${normalizeString(op.toCode).toLowerCase()}>${map.controllerOf(id).toLowerCase()}`;
+        taken.set(pair, (taken.get(pair) ?? 0) + 1);
+        // The lawful sovereign stays; the state is now held by the attacker.
+        if (!sovereign.has(id)) sovereign.set(id, map.sovereignOf(id));
+        controller.set(id, normalizeString(op.toCode));
+      }
+      keptOps.push(op);
+    }
+    if (Array.isArray(impacts.regionControlOps)) impacts.regionControlOps = keptOps;
+    const playerOrdered = normalizeArray(impacts.actionIds).length > 0;
+    const keptTransfers = [];
+    for (const transfer of normalizeArray(impacts.regionTransfers)) {
+      const reason = checkLegalTransfer({ transfer, world: worldState, agreementUpdates, map, playerPolity, playerOrdered });
+      if (reason) {
+        refused.push({ path, family: "regionTransfers", label: normalizeString(transfer?.regionName) || map.nameOf(normalizeString(transfer?.regionId)), warRule: reason });
+        continue;
+      }
+      const id = normalizeString(transfer?.regionId);
+      if (id) { sovereign.set(id, normalizeString(transfer.toCode)); controller.set(id, normalizeString(transfer.toCode)); }
+      keptTransfers.push(transfer);
+    }
+    if (Array.isArray(impacts.regionTransfers)) impacts.regionTransfers = keptTransfers;
+  }
+  return refused;
+};
+
 // Why one territorial operation was refused, in a few words (claimGuard.js).
 const refusalReason = (entry) => {
+  if (entry?.warRule) return entry.warRule;
   if (entry?.ownerMismatch) return `${entry.ownerMismatch.regionName} belongs to ${entry.ownerMismatch.actualOwner}, not to ${normalizeString(entry.fromCode)}`;
   if (entry?.unknownOwner) return `"${entry.unknownOwner}" is not a power on this map`;
   if (entry?.kind === "narrated-city-coverage") return `no control operation targeted ${entry.cityName || entry.label}`;
@@ -5773,6 +5856,9 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // The time skip being validated (createJumpRequests), so that the place-name
   // resolver's model call asks the skip's budget first. Null outside a skip.
   requests = null,
+  // The world map's war rules ({ playerPolity, spanDays }), for a simulated turn
+  // on a world-map game; null everywhere else (runtime/worldmap/warRules.js).
+  warRules = null,
 } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
@@ -5851,8 +5937,24 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // fell, was ceded or surrendered, is rewritten as an attempt; so is a
   // capitulation with nothing behind it. Turn narration only — a Game Master edit
   // (captureGuard false) is the administrator's own word.
+  // The war rules of the world map (runtime/worldmap/warRules.js): control only in
+  // a declared war and state by state, sovereignty only by treaty or after a
+  // capitulation. Simulated turns on a world-map game only (the caller passes
+  // warRules); what they refuse is told like any other refusal.
+  const warRefused = warRules && captureGuard && Array.isArray(candidate?.events)
+    ? enforceWarRules(containers, candidate, world, warRules)
+    : [];
+  if (strict && warRefused.length) {
+    return warRefused.slice(0, 4)
+      .map((entry) => `${entry.path}.${entry.family}: "${entry.label}" was refused — ${entry.warRule}.`)
+      .join("\n");
+  }
+  for (const entry of warRefused) {
+    const what = entry.family === "regionControlOps" ? "control operation on" : "transfer of";
+    noteReceipt(receipt, "dropped", `${titleAt(entry.path) ? `Event "${titleAt(entry.path)}": ` : ""}the ${what} "${entry.label}" was refused — ${entry.warRule}. It did NOT change hands.`);
+  }
   if (captureGuard && Array.isArray(candidate?.events)) {
-    const refused = [...unresolvedTransfers, ...unresolvedControlOps];
+    const refused = [...unresolvedTransfers, ...unresolvedControlOps, ...warRefused];
     for (const note of guardRefusedTerritory(containers, refused, { describe: refusalReason })) {
       noteReceipt(receipt, "withheld", note);
     }
@@ -11989,6 +12091,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             strictTransfers: strict,
             receipt: draft,
             requests: state.requests,
+            // The world map's war rules, on a world-map game only (warRules.js).
+            warRules: (await isWorldMapGame()) ? { playerPolity: normalizeString(bundle.game.country), spanDays } : null,
           });
           if (worldChangeError) return worldChangeError;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
