@@ -128,6 +128,31 @@ const EXTRA_ALIASES = {
 const WEST_AFRICA_1936 = {
   NGA: "United Kingdom", GHA: "United Kingdom", SLE: "United Kingdom", GMB: "United Kingdom", SHN: "United Kingdom", GNB: "Portugal",
 };
+// Les autres territoires coloniaux de 1936 dont les anciennes régions du
+// scénario étaient mal calées (enquête du 28 septembre 2026). Pays
+// d'aujourd'hui → propriétaire de 1936, ou { défaut, régions admin-1 → autre
+// propriétaire } quand le pays d'aujourd'hui réunit deux colonies. Uniquement
+// des pays qui existent dans le scénario : Bahreïn, absent, n'y figure pas.
+const COLONIES_1936 = {
+  // Cameroun français ; la bande ouest (Sud-Ouest, Nord-Ouest) était le Cameroun britannique.
+  CMR: { owner: "France", byRegion: { "Sud-Ouest": "United Kingdom", "Nord-Ouest": "United Kingdom" } },
+  SOL: "United Kingdom", LSO: "United Kingdom", SWZ: "United Kingdom", MWI: "United Kingdom",
+  MUS: "United Kingdom", SYC: "United Kingdom", SGP: "United Kingdom",
+  ERI: "Italy",
+  SAH: "Spain", GNQ: "Spain",
+  CPV: "Portugal", STP: "Portugal",
+  COM: "France",
+  PNG: "Dominion of Australia",
+  // Royaume du Yémen au nord ; le protectorat d'Aden au sud était britannique.
+  YEM: { owner: "Yemen", byRegion: { Lahij: "United Kingdom", Abyan: "United Kingdom", "Al Dali'": "United Kingdom", Shabwah: "United Kingdom", Hadramawt: "United Kingdom", "Al Mahrah": "United Kingdom", Aden: "United Kingdom" } },
+  OMN: "Oman",
+  MMR: "British Raj",
+};
+const colonialOwner = (today, regionName) => {
+  const entry = COLONIES_1936[today];
+  if (!entry) return "";
+  return typeof entry === "string" ? entry : entry.byRegion[regionName] ?? entry.owner;
+};
 const EXTRA_OWNER = { Danzig: "Free City of Danzig", Tangier: "Tangier International Zone", Ifni: "Spain", Zara: "Italy", Lagosta: "Italy", Karelia: "Finland", Tuva: "Tannu Tuva" };
 // Pays d'aujourd'hui dont tout le territoire appartenait en 1936 à un seul pays
 // (frontières inchangées, ou pays de 1936 plus grand) : on s'y fie plutôt qu'à la
@@ -194,6 +219,7 @@ for (let k = 0; k < count; k += 1) {
   // d'aujourd'hui ; le Ghana comprend le Togo britannique, le Nigeria le
   // Cameroun septentrional britannique.
   else if (WEST_AFRICA_1936[today]) { owner = WEST_AFRICA_1936[today]; rule = `Afrique de l'Ouest de 1936 (${today})`; }
+  else if (colonialOwner(today, stateName(k))) { owner = colonialOwner(today, stateName(k)); rule = `territoire colonial de 1936 (${today})`; }
   else if (today === "MAR" && hb1914[id] === "Spanish Morocco") { owner = "Spain"; rule = "Maroc espagnol"; }
   else if (/sakhalin/i.test(stateName(k)) && hb1938[id] === "Empire of Japan") { owner = "Imperialist Japan"; rule = "Karafuto"; }
   // La carte de 1938 (historical-basemaps) donne la Mazurie à la Pologne : la
@@ -361,6 +387,17 @@ const CHECKS = [
   ["Maroc, Afrique, Levant", [["Tétouan", -5.37, 35.57, "Spain"], ["Nador", -2.93, 35.17, "Spain"], ["Al Hoceïma (Rif)", -3.93, 35.25, "Spain"], ["Ifni", -10.17, 29.38, "Spain"],
     ["Tanger", -5.8, 35.77, "Tangier International Zone"], ["Djibouti", 43.15, 11.59, "France"], ["Tadjoura", 42.88, 11.79, "France"], ["Antioche (Hatay)", 36.16, 36.2, "French Syria"], ["Amman", 35.93, 31.95, "British Transjordan"],
     ["Aydın (Anatolie)", 27.84, 37.85, "Turkey"], ["Mardin", 40.73, 37.31, "Turkey"], ["Khoy (Iran)", 44.95, 38.55, "Iran"], ["Koweït", 47.98, 29.37, "British Kuwait"]]],
+  ["Colonies d'Afrique", [["Yaoundé (Cameroun français)", 11.52, 3.87, "France"], ["Douala (Cameroun français)", 9.7, 4.05, "France"],
+    ["Buea (Cameroun britannique)", 9.24, 4.16, "United Kingdom"], ["Bamenda (Cameroun britannique)", 10.15, 5.96, "United Kingdom"],
+    ["Hargeisa (Somaliland)", 44.06, 9.56, "United Kingdom"], ["Maseru (Basutoland)", 27.48, -29.31, "United Kingdom"],
+    ["Mbabane (Swaziland)", 31.13, -26.32, "United Kingdom"], ["Zomba (Nyassaland)", 35.32, -15.39, "United Kingdom"],
+    ["Asmara (Érythrée)", 38.93, 15.33, "Italy"], ["Villa Cisneros (Sahara espagnol)", -15.93, 23.72, "Spain"],
+    ["Bata (Guinée espagnole)", 9.77, 1.86, "Spain"], ["Praia (Cap-Vert)", -23.51, 14.93, "Portugal"], ["São Tomé", 6.73, 0.34, "Portugal"],
+    ["Moroni (Comores)", 43.26, -11.7, "France"], ["Port-Louis (Maurice)", 57.5, -20.16, "United Kingdom"], ["Victoria (Seychelles)", 55.45, -4.62, "United Kingdom"]]],
+  ["Colonies d'Asie et d'Arabie", [["Sanaa (Yémen)", 44.21, 15.35, "Yemen"], ["Aden (protectorat)", 45.03, 12.79, "United Kingdom"], ["Mukalla (Hadramaout)", 49.12, 14.54, "United Kingdom"],
+    ["Mascate (Oman)", 58.41, 23.59, "Oman"], ["Nizwa (Oman)", 57.53, 22.93, "Oman"], ["Singapour", 103.85, 1.29, "United Kingdom"],
+    ["Port Moresby (Papouasie)", 147.18, -9.44, "Dominion of Australia"], ["Rabaul (Nouvelle-Guinée)", 152.18, -4.2, "Dominion of Australia"],
+    ["Lae (Nouvelle-Guinée)", 147.0, -6.72, "Dominion of Australia"], ["Rangoun (Birmanie)", 96.16, 16.8, "British Raj"], ["Mandalay (Birmanie)", 96.08, 21.97, "British Raj"]]],
   ["Afrique de l'Ouest", [["Monrovia", -10.8, 6.3, "Liberia"], ["Gbarnga", -9.47, 7.0, "Liberia"], ["Harper", -7.72, 4.38, "Liberia"],
     ["Freetown (Sierra Leone)", -13.23, 8.48, "United Kingdom"], ["Lagos (Nigeria)", 3.39, 6.45, "United Kingdom"], ["Kano (Nigeria)", 8.52, 12.0, "United Kingdom"],
     ["Accra (Côte-de-l'Or)", -0.19, 5.6, "United Kingdom"], ["Ho (Togo britannique)", 0.47, 6.6, "United Kingdom"], ["Bathurst (Gambie)", -16.58, 13.45, "United Kingdom"],

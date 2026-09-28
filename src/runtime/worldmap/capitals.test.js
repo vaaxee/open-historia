@@ -68,6 +68,14 @@ test("the world summary gives the capitals, and the correction writes and checks
   assert.match(correction, /NGA: "United Kingdom", GHA: "United Kingdom", SLE: "United Kingdom", GMB: "United Kingdom", SHN: "United Kingdom", GNB: "Portugal"/);
   assert.match(correction, /else if \(WEST_AFRICA_1936\[today\]\) \{ owner = WEST_AFRICA_1936\[today\];/);
   for (const place of ["Freetown", "Lagos", "Accra", "Bathurst", "Bissau"]) assert.match(correction, new RegExp(`\\["${place} \\(`), place);
+  // The other colonial territories of 1936, split by admin-1 region where today's country joins two.
+  assert.match(correction, /CMR: \{ owner: "France", byRegion: \{ "Sud-Ouest": "United Kingdom", "Nord-Ouest": "United Kingdom" \} \}/);
+  assert.match(correction, /YEM: \{ owner: "Yemen", byRegion: \{ Lahij: "United Kingdom", Abyan: "United Kingdom"/);
+  for (const [code, owner] of [["ERI", "Italy"], ["SAH", "Spain"], ["GNQ", "Spain"], ["CPV", "Portugal"], ["STP", "Portugal"], ["COM", "France"], ["PNG", "Dominion of Australia"], ["OMN", "Oman"], ["MMR", "British Raj"]]) {
+    assert.match(correction, new RegExp(`${code}: "${owner}"`), code);
+  }
+  assert.doesNotMatch(correction, /BHR: /, "Bahrain is not a polity of the scenario: nothing is invented");
+  for (const place of ["Buea (Cameroun britannique)", "Aden (protectorat)", "Rangoun (Birmanie)", "Port Moresby (Papouasie)"]) assert.ok(correction.includes(`["${place}"`), place);
   assert.match(correction, /newOwners: NEW_OWNERS, capitals,/);
   const server = fs.readFileSync(path.join(here, "..", "..", "..", "server", "worldMap.js"), "utf8");
   assert.match(server, /app\.get\("\/api\/worldmap\/capitals"/);
