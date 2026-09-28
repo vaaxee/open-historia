@@ -76,8 +76,8 @@ test("the world summary gives the capitals, and the correction writes and checks
   }
   // Bahrain, absent from the scenario, is added like Danzig and Tangier: a new polity with its profile.
   assert.match(correction, /BHR: "Bahrain",/);
-  assert.match(correction, /  Bahrain: \{\n    color: \[196, 60, 70\],\n    label: "Bahreïn",/);
-  assert.match(correction, /tags: \["british puppet"\],\n    flag: FLAGS_1936\.Bahrain,/);
+  assert.match(correction, /  Bahrain: \{\r?\n    color: \[196, 60, 70\],\r?\n    label: "Bahreïn",/);
+  assert.match(correction, /tags: \["british puppet"\],\r?\n    flag: FLAGS_1936\.Bahrain,/);
   assert.equal(CAPITALS_1936.Bahrain[0], "Manama");
   for (const place of ["Buea (Cameroun britannique)", "Aden (protectorat)", "Rangoun (Birmanie)", "Port Moresby (Papouasie)"]) assert.ok(correction.includes(`["${place}"`), place);
   assert.match(correction, /newOwners: NEW_OWNERS, capitals,/);

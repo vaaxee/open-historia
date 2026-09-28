@@ -141,8 +141,8 @@ const WEST_AFRICA_1936 = {
 // Les autres territoires coloniaux de 1936 dont les anciennes régions du
 // scénario étaient mal calées (enquête du 28 septembre 2026). Pays
 // d'aujourd'hui → propriétaire de 1936, ou { défaut, régions admin-1 → autre
-// propriétaire } quand le pays d'aujourd'hui réunit deux colonies. Uniquement
-// des pays qui existent dans le scénario : Bahreïn, absent, n'y figure pas.
+// propriétaire } quand le pays d'aujourd'hui réunit deux colonies. Des pays du
+// scénario, ou ajoutés par la correction (NEW_OWNERS : Bahreïn).
 const COLONIES_1936 = {
   // Cameroun français ; la bande ouest (Sud-Ouest, Nord-Ouest) était le Cameroun britannique.
   CMR: { owner: "France", byRegion: { "Sud-Ouest": "United Kingdom", "Nord-Ouest": "United Kingdom" } },
