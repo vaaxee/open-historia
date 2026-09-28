@@ -64,6 +64,10 @@ test("the world summary gives the capitals, and the correction writes and checks
   // Liberia keeps its 1936 borders (today's): Monrovia was British and the north French in the old regions.
   assert.match(correction, /else if \(today === "LBR"\) \{ owner = "Liberia";/);
   assert.match(correction, /\["Monrovia", -10\.8, 6\.3, "Liberia"\]/);
+  // British and Portuguese West Africa keep their colonial borders (today's).
+  assert.match(correction, /NGA: "United Kingdom", GHA: "United Kingdom", SLE: "United Kingdom", GMB: "United Kingdom", SHN: "United Kingdom", GNB: "Portugal"/);
+  assert.match(correction, /else if \(WEST_AFRICA_1936\[today\]\) \{ owner = WEST_AFRICA_1936\[today\];/);
+  for (const place of ["Freetown", "Lagos", "Accra", "Bathurst", "Bissau"]) assert.match(correction, new RegExp(`\\["${place} \\(`), place);
   assert.match(correction, /newOwners: NEW_OWNERS, capitals,/);
   const server = fs.readFileSync(path.join(here, "..", "..", "..", "server", "worldMap.js"), "utf8");
   assert.match(server, /app\.get\("\/api\/worldmap\/capitals"/);

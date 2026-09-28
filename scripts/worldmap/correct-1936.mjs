@@ -124,6 +124,10 @@ const EXTRA_ALIASES = {
   Danzig: ["Danzig", "Free City of Danzig"], Tangier: ["Tangier", "Tanger", "Tangier Zone"], Ifni: ["Ifni", "Sidi Ifni"],
   Zara: ["Zara"], Lagosta: ["Lagosta"], Karelia: ["Karelian Isthmus", "Viipuri"], Tuva: ["Tannu Tuva", "Tuva"],
 };
+// Pays d'aujourd'hui → colonie de 1936 (frontières inchangées).
+const WEST_AFRICA_1936 = {
+  NGA: "United Kingdom", GHA: "United Kingdom", SLE: "United Kingdom", GMB: "United Kingdom", SHN: "United Kingdom", GNB: "Portugal",
+};
 const EXTRA_OWNER = { Danzig: "Free City of Danzig", Tangier: "Tangier International Zone", Ifni: "Spain", Zara: "Italy", Lagosta: "Italy", Karelia: "Finland", Tuva: "Tannu Tuva" };
 // Pays d'aujourd'hui dont tout le territoire appartenait en 1936 à un seul pays
 // (frontières inchangées, ou pays de 1936 plus grand) : on s'y fie plutôt qu'à la
@@ -184,6 +188,12 @@ for (let k = 0; k < count; k += 1) {
   // du scénario, mal calées, donnaient Monrovia au Royaume-Uni et le nord
   // (Foya, Gbarnga, Ganta) à la France.
   else if (today === "LBR") { owner = "Liberia"; rule = "Libéria (frontières inchangées depuis 1936)"; }
+  // Afrique de l'Ouest britannique et portugaise : même défaut de calage (la
+  // moitié du Nigeria, la Sierra Leone, la Gambie, la Guinée-Bissau et une partie
+  // du Ghana étaient françaises). Frontières coloniales = frontières
+  // d'aujourd'hui ; le Ghana comprend le Togo britannique, le Nigeria le
+  // Cameroun septentrional britannique.
+  else if (WEST_AFRICA_1936[today]) { owner = WEST_AFRICA_1936[today]; rule = `Afrique de l'Ouest de 1936 (${today})`; }
   else if (today === "MAR" && hb1914[id] === "Spanish Morocco") { owner = "Spain"; rule = "Maroc espagnol"; }
   else if (/sakhalin/i.test(stateName(k)) && hb1938[id] === "Empire of Japan") { owner = "Imperialist Japan"; rule = "Karafuto"; }
   // La carte de 1938 (historical-basemaps) donne la Mazurie à la Pologne : la
@@ -352,7 +362,10 @@ const CHECKS = [
     ["Tanger", -5.8, 35.77, "Tangier International Zone"], ["Djibouti", 43.15, 11.59, "France"], ["Tadjoura", 42.88, 11.79, "France"], ["Antioche (Hatay)", 36.16, 36.2, "French Syria"], ["Amman", 35.93, 31.95, "British Transjordan"],
     ["Aydın (Anatolie)", 27.84, 37.85, "Turkey"], ["Mardin", 40.73, 37.31, "Turkey"], ["Khoy (Iran)", 44.95, 38.55, "Iran"], ["Koweït", 47.98, 29.37, "British Kuwait"]]],
   ["Afrique de l'Ouest", [["Monrovia", -10.8, 6.3, "Liberia"], ["Gbarnga", -9.47, 7.0, "Liberia"], ["Harper", -7.72, 4.38, "Liberia"],
-    ["Freetown (Sierra Leone)", -13.23, 8.48, "United Kingdom"], ["Conakry (Guinée)", -13.7, 9.54, "France"], ["Abidjan (Côte d'Ivoire)", -4.03, 5.35, "France"]]],
+    ["Freetown (Sierra Leone)", -13.23, 8.48, "United Kingdom"], ["Lagos (Nigeria)", 3.39, 6.45, "United Kingdom"], ["Kano (Nigeria)", 8.52, 12.0, "United Kingdom"],
+    ["Accra (Côte-de-l'Or)", -0.19, 5.6, "United Kingdom"], ["Ho (Togo britannique)", 0.47, 6.6, "United Kingdom"], ["Bathurst (Gambie)", -16.58, 13.45, "United Kingdom"],
+    ["Bissau (Guinée portugaise)", -15.6, 11.86, "Portugal"], ["Georgetown (Ascension)", -14.41, -7.93, "United Kingdom"],
+    ["Conakry (Guinée)", -13.7, 9.54, "France"], ["Abidjan (Côte d'Ivoire)", -4.03, 5.35, "France"], ["Lomé (Togo français)", 1.22, 6.13, "France"], ["Dakar (Sénégal)", -17.44, 14.69, "France"]]],
   ["Asie", [["Toyohara (sud de Sakhaline)", 142.73, 46.96, "Imperialist Japan"], ["Okha (nord de Sakhaline)", 142.95, 53.57, "Soviet Union"], ["Kyzyl (Touva)", 94.45, 51.72, "Tannu Tuva"]]],
   ["1936 contre 1938", [["Vienne", 16.37, 48.21, "Austria"], ["Innsbruck", 11.4, 47.27, "Austria"], ["Karlsbad (Sudètes)", 12.87, 50.23, "Czechoslovakia"],
     ["Reichenberg (Sudètes)", 15.06, 50.77, "Czechoslovakia"], ["Zaolzie (Karviná)", 18.54, 49.85, "Czechoslovakia"], ["Kassa (Košice)", 21.26, 48.72, "Czechoslovakia"],
