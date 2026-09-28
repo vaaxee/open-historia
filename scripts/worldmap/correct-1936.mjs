@@ -180,6 +180,10 @@ for (let k = 0; k < count; k += 1) {
   else if (today === "AUT") { owner = "Austria"; rule = "Autriche de 1936"; }
   else if (today === "CZE" || today === "SVK" || /zakarpat|transcarpath/i.test(stateName(k))) { owner = "Czechoslovakia"; rule = "Tchécoslovaquie de 1936"; }
   else if (today === "DJI") { owner = "France"; rule = "Côte française des Somalis"; }
+  // Libéria : frontières de 1936 = celles d'aujourd'hui. Les anciennes régions
+  // du scénario, mal calées, donnaient Monrovia au Royaume-Uni et le nord
+  // (Foya, Gbarnga, Ganta) à la France.
+  else if (today === "LBR") { owner = "Liberia"; rule = "Libéria (frontières inchangées depuis 1936)"; }
   else if (today === "MAR" && hb1914[id] === "Spanish Morocco") { owner = "Spain"; rule = "Maroc espagnol"; }
   else if (/sakhalin/i.test(stateName(k)) && hb1938[id] === "Empire of Japan") { owner = "Imperialist Japan"; rule = "Karafuto"; }
   // La carte de 1938 (historical-basemaps) donne la Mazurie à la Pologne : la
@@ -313,8 +317,17 @@ const at = (lng, lat) => {
 // de son pays. Écrites avec leur état, pour que l'IA sache laquelle prendre.
 const capitals = {};
 const capitalErrors = [];
+// La province de la ville elle-même (son nom d'aujourd'hui ou de 1936) chez ce
+// pays ; le point seulement à défaut : Kaunas, à 23,90° E, tombait sinon dans la
+// province voisine, et la capitale lituanienne dans l'état d'Alytus.
+const cityProvince = (polity, city) => {
+  const names = new Set([city]);
+  for (const [today, period] of Object.entries(PERIOD_ALIASES_1936)) if (today === city || period.includes(city)) { names.add(today); period.forEach((n) => names.add(n)); }
+  const hits = provinces.filter((p, k) => !p.empty && owners[k] === polity && names.has(p.city));
+  return hits.length ? hits.sort((a, b) => (b.population || 0) - (a.population || 0))[0].id : 0;
+};
 for (const [polity, [city, lng, lat]] of Object.entries(CAPITALS_1936)) {
-  const id = at(lng, lat);
+  const id = cityProvince(polity, city) || at(lng, lat);
   const owner = id ? owners[id - 1] : "";
   if (owner !== polity) { capitalErrors.push(`${polity} : ${city} tombe chez « ${owner || "(mer)"} »`); continue; }
   capitals[polity] = { city, state: states[id - 1], stateName: stateInfo[states[id - 1]]?.name ?? "", province: id };
@@ -338,6 +351,8 @@ const CHECKS = [
   ["Maroc, Afrique, Levant", [["Tétouan", -5.37, 35.57, "Spain"], ["Nador", -2.93, 35.17, "Spain"], ["Al Hoceïma (Rif)", -3.93, 35.25, "Spain"], ["Ifni", -10.17, 29.38, "Spain"],
     ["Tanger", -5.8, 35.77, "Tangier International Zone"], ["Djibouti", 43.15, 11.59, "France"], ["Tadjoura", 42.88, 11.79, "France"], ["Antioche (Hatay)", 36.16, 36.2, "French Syria"], ["Amman", 35.93, 31.95, "British Transjordan"],
     ["Aydın (Anatolie)", 27.84, 37.85, "Turkey"], ["Mardin", 40.73, 37.31, "Turkey"], ["Khoy (Iran)", 44.95, 38.55, "Iran"], ["Koweït", 47.98, 29.37, "British Kuwait"]]],
+  ["Afrique de l'Ouest", [["Monrovia", -10.8, 6.3, "Liberia"], ["Gbarnga", -9.47, 7.0, "Liberia"], ["Harper", -7.72, 4.38, "Liberia"],
+    ["Freetown (Sierra Leone)", -13.23, 8.48, "United Kingdom"], ["Conakry (Guinée)", -13.7, 9.54, "France"], ["Abidjan (Côte d'Ivoire)", -4.03, 5.35, "France"]]],
   ["Asie", [["Toyohara (sud de Sakhaline)", 142.73, 46.96, "Imperialist Japan"], ["Okha (nord de Sakhaline)", 142.95, 53.57, "Soviet Union"], ["Kyzyl (Touva)", 94.45, 51.72, "Tannu Tuva"]]],
   ["1936 contre 1938", [["Vienne", 16.37, 48.21, "Austria"], ["Innsbruck", 11.4, 47.27, "Austria"], ["Karlsbad (Sudètes)", 12.87, 50.23, "Czechoslovakia"],
     ["Reichenberg (Sudètes)", 15.06, 50.77, "Czechoslovakia"], ["Zaolzie (Karviná)", 18.54, 49.85, "Czechoslovakia"], ["Kassa (Košice)", 21.26, 48.72, "Czechoslovakia"],

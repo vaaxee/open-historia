@@ -211,7 +211,7 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
   - `states-default.json` : découpage mondial par défaut en états, d'après l'admin-1 de Natural Earth ;
   - `meta.json`.
 - **Numéros** : les provinces terrestres vont de 1 à n (≈ 13 100). Les numéros de 20 000 à 29 999 sont réservés aux zones maritimes.
-- **Noms** : la plus grande ville de la province ; sinon la ville la plus proche du même pays (« Ville – n »).
+- **Noms** : la plus grande ville de la province ; sinon la ville la plus proche du même pays (« Ville – n »). Une ville dont le point tombe en mer (Copenhague, Wellington, Montevideo…) est recalée sur la terre la plus proche, à deux cases au plus ; elle était perdue auparavant.
 - **Noms d'îles** (`scripts/worldmap/islands.mjs`) : une province faite d'une île entière porte le nom de l'île (Bornholm, Sylt, Pantelleria, Madeira…), pas celui de la ville la plus proche, souvent d'un autre pays (Ystad, Tønder, Kélibia).
   - Les noms viennent de Natural Earth (contours et points d'îles, archipels) et d'une liste de ≈ 200 îles d'Europe et de Méditerranée, chacune repérée par un point.
   - Une province sans ville qui détient la plus grande part d'une petite île prend son nom ; sur une grande île découpée, une province sans ville prend la ville la plus proche de la même île et du même pays.
@@ -249,7 +249,8 @@ node scripts/worldmap/render.mjs -11 35 31 61 europe.png 1800   # un aperçu
 - **Correction à une date** : `node --max-old-space-size=8192 scripts/worldmap/correct-1936.mjs <scénario>`.
   - Garde la conversion brute dans `provinces.v1.converted.json`, en repart toujours, et écrit `provinces.v1.json` et `corrections-1936.json` (points de contrôle et différences en Europe et en Méditerranée).
   - En Europe et en Méditerranée, chaque province prend le pays de la carte de 1938, rapporté au pays du scénario.
-  - La correction remet ensuite l'Autriche, la Tchécoslovaquie entière (Sudètes, Teschen, sud de la Slovaquie, Ruthénie), Djibouti, le Maroc espagnol (d'après 1914) et le sud de Sakhaline.
+  - La correction remet ensuite l'Autriche, la Tchécoslovaquie entière (Sudètes, Teschen, sud de la Slovaquie, Ruthénie), Djibouti, le Maroc espagnol (d'après 1914), le sud de Sakhaline et le Libéria dans ses frontières d'aujourd'hui (les anciennes régions donnaient Monrovia au Royaume-Uni et le nord à la France).
+  - Doute ouvert : ailleurs en Afrique de l'Ouest, les anciennes régions sont aussi mal calées (moitié du Nigeria, Sierra Leone, Gambie, Guinée-Bissau et une partie du Ghana données à la France) ; le point de contrôle de Freetown le signale, rien n'est corrigé encore.
   - Les compléments 1936 (`scripts/worldmap/guides-1936.mjs`, tracés à la main à quelques km près) donnent Dantzig ville libre, Tanger zone internationale, Ifni, Zara et Lagosta italiennes, et Touva (d'après Natural Earth). Ce sont aussi des lignes guides de la carte : aucune province ne les chevauche.
   - Une province qui change de pays quitte son ancien état.
 - **Propriétaires de départ** : `stateOwners` donne le propriétaire de chaque état au départ. Une partie qui recopie le scénario ne change donc rien ; seul ce qui en diffère compte.

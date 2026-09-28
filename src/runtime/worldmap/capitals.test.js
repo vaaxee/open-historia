@@ -59,6 +59,11 @@ test("the world summary gives the capitals, and the correction writes and checks
   assert.match(summary, /Capitals \(the seat of each government/);
   const correction = fs.readFileSync(path.join(here, "..", "..", "..", "scripts", "worldmap", "correct-1936.mjs"), "utf8");
   assert.match(correction, /if \(owner !== polity\) \{ capitalErrors\.push/);
+  // The capital is the province of the city itself (today's or 1936 name), the point only failing that.
+  assert.match(correction, /const id = cityProvince\(polity, city\) \|\| at\(lng, lat\);/);
+  // Liberia keeps its 1936 borders (today's): Monrovia was British and the north French in the old regions.
+  assert.match(correction, /else if \(today === "LBR"\) \{ owner = "Liberia";/);
+  assert.match(correction, /\["Monrovia", -10\.8, 6\.3, "Liberia"\]/);
   assert.match(correction, /newOwners: NEW_OWNERS, capitals,/);
   const server = fs.readFileSync(path.join(here, "..", "..", "..", "server", "worldMap.js"), "utf8");
   assert.match(server, /app\.get\("\/api\/worldmap\/capitals"/);

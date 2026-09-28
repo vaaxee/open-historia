@@ -1132,13 +1132,31 @@ log("Attributs…");
       if (m && m !== l && n > c) link(l, m, bigRiver[c] || bigRiver[n] ? "fleuve" : "terre");
     }
   }
+  // La case de terre la plus proche d'un point, à maxR cases au plus (-1 sinon).
+  const cellNear = (lng, lat, maxR = 4) => {
+    const c0 = cellOf(lng, lat);
+    if (c0 < 0) return -1;
+    if (land[c0]) return c0;
+    const i0 = c0 % W; const j0 = (c0 - i0) / W;
+    for (let r = 1; r <= maxR; r += 1) {
+      for (let dj = -r; dj <= r; dj += 1) for (let di = -r; di <= r; di += 1) {
+        if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+        const i = i0 + di; const j = j0 + dj;
+        if (i >= 0 && i < W && j >= 0 && j < H && land[j * W + i]) return j * W + i;
+      }
+    }
+    return -1;
+  };
   // Villes : la plus peuplée nomme la province ; toutes comptent dans sa population.
+  // Une ville dont le point tombe en mer (Copenhague, Koweït, Wellington, Manille,
+  // Montevideo…) est recalée sur la terre la plus proche, à deux cases au plus :
+  // elle était sinon perdue, et sa province portait le nom d'une banlieue.
   const population = new Float64Array(count + 1);
   const bestCity = new Array(count + 1).fill(null);
   const cityList = readCities();
   for (const city of cityList) {
-    const cell = cellOf(city.lng, city.lat);
-    if (cell < 0 || !land[cell] || !labels[cell]) continue;
+    const cell = cellNear(city.lng, city.lat, 2);
+    if (cell < 0 || !labels[cell]) continue;
     const l = labels[cell];
     population[l] += city.population;
     if (!bestCity[l] || city.population > bestCity[l].population) bestCity[l] = city;
@@ -1268,20 +1286,6 @@ log("Attributs…");
   // pays (islands.mjs). Le rapport : islands-report.json.
   {
     const { comp, km2: compKm2 } = landComponents(land);
-    const cellNear = (lng, lat) => {
-      const c0 = cellOf(lng, lat);
-      if (c0 < 0) return -1;
-      if (land[c0]) return c0;
-      const i0 = c0 % W; const j0 = (c0 - i0) / W;
-      for (let r = 1; r <= 4; r += 1) {
-        for (let dj = -r; dj <= r; dj += 1) for (let di = -r; di <= r; di += 1) {
-          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
-          const i = i0 + di; const j = j0 + dj;
-          if (i >= 0 && i < W && j >= 0 && j < H && land[j * W + i]) return j * W + i;
-        }
-      }
-      return -1;
-    };
     const regions = ne("ne_10m_geography_regions_polys");
     const islandRaster = new Int32Array(N); const groupRaster = new Int32Array(N);
     const islandNames = [""]; const groupNames = [""]; const groupKm2 = [0];
