@@ -63,7 +63,8 @@ test("the skip starts the player's wars before the war rules read the answer, on
   const source = fs.readFileSync(path.join(path.dirname(url.fileURLToPath(import.meta.url)), "gameplay.js"), "utf8");
   const add = source.indexOf("if (segmentIndex === 0) addPlayerWars(candidate, bundle,");
   const validate = source.indexOf("const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, {", add);
-  assert.ok(add > 0 && validate > add && validate - add < 400);
+  const verdicts = source.indexOf("enforceProposalVerdicts(candidate, context.proposalVerdicts ?? []", add);
+  assert.ok(add > 0 && verdicts > add && validate > verdicts, "wars, then the proposals' verdicts, then the validation that reads both");
   const helper = source.slice(source.indexOf("const addPlayerWars = "), source.indexOf("const checkClaimsAgainstHolders = "));
   assert.match(helper, /candidate\.events\.push\(\{ \.\.\.event, id: `engine-war-\$\{index \+ 1\}` \}\);/, "at the end, so cited indexes stay right");
   assert.match(helper, /noteReceipt\(receipt, "dropped", `The player's order/);

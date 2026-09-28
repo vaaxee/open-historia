@@ -283,6 +283,7 @@ Après le test de la partie F :
 - **Revendications** (`src/Game/AI/claimHolderCheck.js`) : chaque revendication porte le nom et le propriétaire de sa région ; un récit qui fait réagir un voisin comme si la région était la sienne, sans nommer son vrai propriétaire, est relancé avec le propriétaire indiqué.
 - **Aucun code de région** dans un texte : le narrateur ne reçoit que des noms, et tout code restant est remplacé par le nom de la région (`scrubRegionCodes`). Les phrases du garde-fou sont de la prose simple ; les raisons techniques vont au reçu.
 - **Guerre du joueur** (`src/Game/AI/playerWarOrders.js`) : un ordre qui déclare la guerre à un pays connu, absente du monde et de la réponse, est exécuté par le moteur (événement rattaché à l'ordre) ; un ordre sans pays identifiable est refusé dans le reçu.
+- **Propositions du joueur** (`src/Game/AI/playerDiplomacy.js`) : au début du tour, chaque ordre qui propose, exige ou négocie quelque chose avec un seul pays (ou un ordre de discussion à un seul pays) ouvre une vraie discussion — le message part du joueur, le pays répond par le prompt diplomatique ordinaire (bloc Realpolitik compris) et donne un verdict caché (ACCEPT, REFUSE, COUNTER). Le tour connaît le verdict ; un accord entre le joueur et ce pays n'est appliqué que s'il a accepté, et une discussion où il reprendrait la proposition n'est pas ouverte. Chaque réponse coûte une requête, en dehors du budget du saut.
 
 ### Phase 6, étape 2 : la guerre état par état (parties sur la carte mondiale)
 

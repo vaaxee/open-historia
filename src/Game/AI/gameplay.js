@@ -100,6 +100,14 @@ import { canonicalizePayloadPolityNames, mentionedPolities } from "../../runtime
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
 import { planPlayerWars } from "./playerWarOrders.js";
+import {
+  VERDICT_INSTRUCTION,
+  buildProposalThread,
+  describeVerdictForTurn,
+  diplomaticOrders,
+  enforceProposalVerdicts,
+  parseVerdict,
+} from "./playerDiplomacy.js";
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
 import {
   capitulationEvent,
@@ -5751,6 +5759,55 @@ const validateChatOpener = (chatLike, path) => {
 // "preoccupied" never matches; deliberately narrow so a defensive battle that
 // moved no borders never trips the reluctance guards below.
 const CONTROL_CHANGE_LANGUAGE = /\b(captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|fell to|falls? to|takes? control|assumes? control)\b/i;
+
+// The player's proposals, put to the other side before the turn
+// (playerDiplomacy.js): for each, a thread with the player's message and the
+// counterpart's answer (the ordinary diplomatic prompt, [Realpolitik] included)
+// and its verdict. The threads join the game's chats; the turn's copy of the
+// orders says each verdict. Returns { verdicts, actions } — actions only when
+// something was put (the prompt's copy; the stored orders are not changed).
+const putPlayerProposals = async (bundle, { signal = null } = {}) => {
+  const player = normalizeString(bundle?.game?.country);
+  const orders = player ? diplomaticOrders({ actions: normalizeActions(bundle?.actions), world: normalizeWorldState(bundle?.world), player }) : [];
+  if (!orders.length) return { verdicts: [], actions: null };
+  const verdicts = [];
+  const threads = [];
+  const told = new Map();
+  for (const { action, counterpart, message } of orders) {
+    if (signal?.aborted) break;
+    const countries = await resolveInvitees([counterpart], bundle.world);
+    if (!countries.length) continue;
+    let answer = null;
+    try {
+      const parsed = await sendDiplomaticMessageOnceOff({
+        playerMessage: `${message}\n\n${VERDICT_INSTRUCTION}`,
+        speakingAs: countries[0].name,
+        participantNames: [countries[0].name],
+        playerCountry: player,
+        priorMessages: [],
+        opts: { signal },
+      });
+      answer = { ...parsed, ...parseVerdict(parsed?.reply) };
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      logDebugEvent("diplomacy", `The proposal "${normalizeString(action?.title)}" could not be put to ${countries[0].name}; the turn treats it as unanswered.`, error, { problem: true });
+    }
+    const thread = normalizeChatEntry(buildProposalThread({ action, countries, player, message, answer, date: normalizeString(bundle.game?.gameDate) }));
+    if (thread) threads.push(thread);
+    const verdict = answer?.verdict || "";
+    verdicts.push({ actionId: normalizeString(action?.id), counterpart: countries[0].name, verdict, title: thread?.title ?? normalizeString(action?.title) });
+    told.set(normalizeString(action?.id), describeVerdictForTurn({ counterpart: countries[0].name, verdict, title: thread?.title ?? normalizeString(action?.title) }));
+    logDebugEvent("diplomacy", `${player} → ${countries[0].name}: "${normalizeString(action?.title)}" — verdict ${verdict || "(none)"}.`);
+  }
+  if (threads.length) {
+    bundle.chats = [...normalizeArray(bundle.chats), ...threads];
+    await writeChatsState(bundle.chats);
+  }
+  const actions = normalizeActions(bundle.actions).map((action) => (told.has(action.id)
+    ? { ...action, text: `${normalizeString(action.text)} ${told.get(action.id)}`.trim() }
+    : action));
+  return { verdicts, actions };
+};
 const LEGAL_TRANSFER_LANGUAGE = /\b(annex\w*|cedes?|ceded|ceding|cession|sovereignty (?:passes|transfers?|is transferred)|treaty transfer|formal(?:ly)? transfer(?:red)?|incorporat\w*|unification|territorial award|sold|sale of territory)\b/i;
 
 // Strict/salvage discipline, the same contract clampTimelineDates follows:
@@ -12216,6 +12273,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // event, before the war rules read the answer; an order that names nobody
           // is refused in the receipt. The first segment only: orders are the round's.
           if (segmentIndex === 0) addPlayerWars(candidate, bundle, { date: addIsoDays(state.segmentOrigin, 1) || state.segmentOrigin, receipt: draft });
+          // The player's proposals were answered before the turn (playerDiplomacy.js):
+          // an agreement with a counterpart who did not accept is removed, and so is
+          // a chat that would have them restate the proposal.
+          for (const note of enforceProposalVerdicts(candidate, context.proposalVerdicts ?? [], normalizeString(bundle.game.country))) {
+            noteReceipt(draft, "dropped", note);
+          }
           // The war ledger must see the sanitized impacts, so world changes go first.
           const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, {
             strictTransfers: strict,
@@ -12993,6 +13056,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (hasSceneInProgress(bundle.world)) {
     throw new Error("An interactive event is in progress: end it or set it aside before skipping time.");
   }
+  // The player's proposals are put to the other side first (playerDiplomacy.js):
+  // a real thread, the player's message, the counterpart's answer and verdict.
+  // The turn is told each verdict; an agreement stands only if it was accepted.
+  const proposals = await putPlayerProposals(bundle, { signal });
   // One rule for where a skip lands, shared with the timeline's labels
   // (runtime/jumpDates.js), so a label never promises a date the jump misses.
   const dateStep = jumpDayStep(safeDays);
@@ -13001,7 +13068,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
-  const variables = await buildTemplateVariables(bundle, {
+  const variables = await buildTemplateVariables(proposals.actions ? { ...bundle, actions: proposals.actions } : bundle, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
@@ -13048,6 +13115,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     originDate,
     plannedActionCount,
     plannedActionShare,
+    // The verdicts on the player's proposals, which the answer must respect.
+    proposalVerdicts: proposals.verdicts,
     safeDays,
     segmentDays,
     targetDate,
