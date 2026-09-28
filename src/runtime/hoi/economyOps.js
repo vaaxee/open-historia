@@ -26,6 +26,7 @@ import { addGameDays, isGameDate } from "../gameDates.js";
 import { HOI_TUNING, effectiveFactories, findNationKey, normalizeLine, normalizeNation } from "./engine.js";
 import { effectiveTechCost, indexTechTree, isTechAvailable, normalizeResourceKey } from "./research.js";
 import { getEquipmentSpec, isEquipmentUnlocked, unlockedEquipment } from "./techTree.js";
+import { recruitDivision, templatesFor } from "./armies.js";
 
 // Réglages des garde-fous : un seul endroit à modifier, comme HOI_TUNING.
 export const ECONOMY_OP_LIMITS = Object.freeze({
@@ -44,7 +45,10 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit"]);
+
+// Phase 7.1 : au plus tant de divisions par demande de recrutement.
+export const RECRUIT_MAX_PER_OP = 5;
 
 const OP_ALIASES = Object.freeze({
   modifier: "modifier",
@@ -66,6 +70,11 @@ const OP_ALIASES = Object.freeze({
   damage: "damage",
   bombing: "damage",
   sabotage: "damage",
+  recruit: "recruit",
+  recruitment: "recruit",
+  recrutement: "recruit",
+  raise: "recruit",
+  levy: "recruit",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -126,6 +135,14 @@ export const normalizeEconomyOp = (entry) => {
     const amount = finite(entry.amount ?? entry.delta ?? entry.value);
     if (!resource || !Number.isFinite(amount) || amount === 0) return null;
     return { ...base, resource, amount };
+  }
+
+  // Phase 7.1 : une demande de divisions (armies.js recruitDivision).
+  if (op === "recruit") {
+    const template = normalizeResourceKey(entry.template ?? entry.division ?? entry.unitType ?? entry.equipment);
+    const count = finite(entry.count ?? entry.amount ?? entry.value);
+    if (!template) return null;
+    return { ...base, template, count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 1 };
   }
 
   if (op === "research") {
@@ -295,8 +312,39 @@ export const applyEconomyOps = (hoi, ops, { date = null, title = "" } = {}) => {
   }
 
   const nations = { ...hoi.nations };
+  let armies = isObject(hoi.armies) ? { ...hoi.armies } : null;
   let applied = 0;
   for (const op of list) {
+    // Phase 7.1 : un recrutement touche l'armée, jamais sans stock ni hommes.
+    if (op.op === "recruit") {
+      if (!armies) {
+        say("dropped", `recruiting for ${op.polity} was ignored: this game has no armies yet.`);
+        continue;
+      }
+      const armyKey = findNationKey({ nations: armies }, op.polity);
+      if (!armyKey) {
+        say("dropped", `"${op.polity}" has no tracked army; the recruitment was ignored.`);
+        continue;
+      }
+      const wanted = Math.min(op.count, RECRUIT_MAX_PER_OP);
+      if (wanted !== op.count) say("adjusted", `${op.polity} asked for ${op.count} ${op.template} divisions; at most ${RECRUIT_MAX_PER_OP} per request.`);
+      let army = armies[armyKey];
+      let raised = 0;
+      let refusal = "";
+      for (let n = 0; n < wanted; n += 1) {
+        const result = recruitDivision(army, { template: op.template, date: date ?? "" }, templatesFor(hoi.series));
+        if (!result.division) { refusal = result.reason; break; }
+        army = result.army;
+        raised += 1;
+      }
+      if (raised) {
+        armies[armyKey] = army;
+        applied += 1;
+        say("adjusted", `${armyKey} raised ${raised} ${op.template} division(s) from its stockpile.`);
+      }
+      if (refusal) say("dropped", `${armyKey} could not raise ${wanted - raised} more ${op.template} division(s): ${refusal}.`);
+      continue;
+    }
     const key = findNationKey({ nations }, op.polity);
     if (!key) {
       say("dropped", `"${op.polity}" has no tracked economy; the ${op.op} operation was ignored.`);
@@ -309,7 +357,7 @@ export const applyEconomyOps = (hoi, ops, { date = null, title = "" } = {}) => {
       applied += 1;
     }
   }
-  return { hoi: { ...hoi, nations }, applied, notes };
+  return { hoi: { ...hoi, nations, ...(armies ? { armies } : {}) }, applied, notes };
 };
 
 // Toutes les economyOps d'un tour, événement par événement, dans l'ordre.

@@ -28,6 +28,8 @@ export const SOURCES = [
   ["ne_10m_geography_regions_polys.zip", `${NE}/physical/ne_10m_geography_regions_polys.zip`, 2038519, "îles et archipels nommés (contours)", "Natural Earth, domaine public"],
   ["ne_10m_geography_regions_points.zip", `${NE}/physical/ne_10m_geography_regions_points.zip`, 87372, "îles et archipels nommés (points)", "Natural Earth, domaine public"],
   ["cities15000.zip", "https://download.geonames.org/export/dump/cities15000.zip", 3359527, "villes (graines, noms)", "GeoNames, CC BY 4.0"],
+  // Phase 7 (ravitaillement) : les voies ferrées d'aujourd'hui, base de l'infrastructure.
+  ["ne_10m_railroads.zip", `${NE}/cultural/ne_10m_railroads.zip`, 15116579, "voies ferrées (ravitaillement, phase 7)", "Natural Earth, domaine public"],
   ["world_1200.geojson", `${HB}/world_1200.geojson`, 1.1e6, "lignes guides 1200", "historical-basemaps, GPL-3.0"],
   ["world_1914.geojson", `${HB}/world_1914.geojson`, 1.3e6, "lignes guides 1912-1914", "historical-basemaps, GPL-3.0"],
   ["world_1938.geojson", `${HB}/world_1938.geojson`, 1.6e6, "lignes guides 1936-1938", "historical-basemaps, GPL-3.0"],

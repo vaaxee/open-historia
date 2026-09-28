@@ -49,6 +49,8 @@ export const BASE_EQUIPMENT_BRANCH = Object.freeze({
   chasseurs: "aviation",
   bombardiers: "aviation",
   camions: "industrie",
+  navires: "industrie",
+  fournitures: "industrie",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);

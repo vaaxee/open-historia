@@ -20,6 +20,7 @@
 // ottoman d'acier). L'équilibrage se règle ici et dans HOI_TUNING (engine.js).
 
 import { createNation, enableHoiLayer } from "./engine.js";
+import { enableHoiArmies } from "./armies.js";
 
 // Ce que chaque type d'équipement coûte à produire. Une ligne de production créée
 // par l'IA (economyOps, op "line") ne peut viser qu'un équipement de ce catalogue.
@@ -35,6 +36,9 @@ export const HOI_EQUIPMENT = Object.freeze({
   // 1912.
   mitrailleuses: Object.freeze({ label: "mitrailleuses", unitCost: 2, resources: Object.freeze({ acier: 1 }) }),
   obus: Object.freeze({ label: "obus", unitCost: 0.3, resources: Object.freeze({ acier: 1, charbon: 1 }) }),
+  // Phase 7 : les flottes (armies.js) et le ravitaillement des troupes (7.2).
+  navires: Object.freeze({ label: "navires", unitCost: 150, resources: Object.freeze({ acier: 4 }) }),
+  fournitures: Object.freeze({ label: "fournitures", unitCost: 0.2, resources: Object.freeze({}) }),
 });
 
 // Une ligne de production à partir du catalogue : `usines` usines militaires sur
@@ -273,13 +277,16 @@ export const buildPresetNation = (seriesId, polity) => {
 // Active la couche sur une partie avec les valeurs de départ. `seriesId` absent :
 // choisie d'après la date de départ. Renvoie aussi ce qui a été appliqué, pour que
 // l'interface puisse le dire.
-export const enableHoiLayerFromPresets = (world, { startDate, seriesId } = {}) => {
+// Phase 7.1 : avec leurs armées de départ (armies.js), sauf `armies: false`.
+// `capitals` : { polity: { state } }, où les divisions se tiennent au départ.
+export const enableHoiLayerFromPresets = (world, { startDate, seriesId, armies = true, capitals = {} } = {}) => {
   const series = seriesId === undefined ? pickHoiSeries(startDate) : (HOI_SERIES[seriesId] ? String(seriesId) : null);
   const polities = listWorldPolities(world);
   const nations = Object.fromEntries(polities.map((polity) => [polity, buildPresetNation(series, polity)]));
   const detailed = polities.filter((polity) => findPresetNation(series, polity));
+  const enabled = enableHoiLayer(world, { startDate, nations, series });
   return {
-    world: enableHoiLayer(world, { startDate, nations, series }),
+    world: armies ? { ...enabled, hoi: enableHoiArmies(enabled.hoi, { capitals, date: startDate }) } : enabled,
     series,
     detailed,
     neutral: polities.length - detailed.length,

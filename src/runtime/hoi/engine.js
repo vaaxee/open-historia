@@ -36,6 +36,7 @@
 
 import { addGameDays, compareGameDates, diffGameDays } from "../gameDates.js";
 import { advanceResearch, emptyResearchReport, normalizeBonuses, normalizeResearch } from "./research.js";
+import { advanceArmy, templatesFor } from "./armies.js";
 import {
   HOI_BUILDING_TYPES,
   advanceConstruction,
@@ -401,6 +402,20 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
     reports[polity] = report;
   }
 
+  // Phase 7.1 : les armées (armies.js), là où la partie en a. Ce que les lignes
+  // ont sorti entre dans la réserve ; les divisions s'usent, se reposent et se
+  // complètent. Une partie sans world.hoi.armies ne change pas.
+  let armies = world.hoi.armies;
+  if (isObject(armies)) {
+    const templates = templatesFor(world.hoi.series);
+    armies = { ...armies };
+    for (const [polity, army] of Object.entries(armies)) {
+      const advanced = advanceArmy(army, days, { produced: reports[polity]?.produced ?? {}, templates });
+      armies[polity] = advanced.army;
+      if (reports[polity]) reports[polity] = { ...reports[polity], army: advanced.report };
+    }
+  }
+
   return {
     ...world,
     markers,
@@ -410,6 +425,7 @@ export const advanceHoiLayer = (world, { fromDate, toDate, player = "" } = {}) =
       lastDate: toDate,
       lastReport: { fromDate, toDate, days, nations: reports },
       nations,
+      ...(armies ? { armies } : {}),
     },
   };
 };
