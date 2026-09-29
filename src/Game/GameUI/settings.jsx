@@ -1998,6 +1998,12 @@ const SettingsWorkspace = ({
                     Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later, applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
                     </div>
                 </SettingsSection>
+                <SettingsSection title="Local decider (Jev)" description="A small local model chooses the AI countries' military orders on world-map games with armies.">
+                    <Toggle label="Local decider (Jev)" enabled={mapSettings.localDecider} onToggle={() => updateMapSetting("localDecider", MAP_SETTING_KEYS.localDecider, !mapSettings.localDecider)} />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                    Off (default): the engine's rules decide for the AI countries. On: before each turn, Jev judges each AI country's legal options — hold, attack or break through and toward which state, where to send its divisions, its air wings and fleets, what to recruit — and the engine applies the best one, at most 20 decisions per turn, countries at war first. It needs llama-server running on this computer (npm run jev, port 8081); if it does not answer, the engine's rules decide.
+                    </div>
+                </SettingsSection>
                 </>
             )}
 
@@ -2206,6 +2212,8 @@ const SettingsMenu = ({
         // Ships ON as well.
         narrateAfterValidation: getMapSettingDefaultOn(MAP_SETTING_KEYS.narrateAfterValidation),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
+        // Phase 7.9 : ships OFF.
+        localDecider: getMapSetting(MAP_SETTING_KEYS.localDecider),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {

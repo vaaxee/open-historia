@@ -45,9 +45,10 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval"]);
-// Les opérations appliquées au tour, avec la carte (frontsTurn.js).
-export const MAP_OPS = Object.freeze(["front", "air", "naval"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme"]);
+// Les opérations appliquées au tour, avec la carte (frontsTurn.js), et le
+// programme d'un pays pour son décideur local (localDecider.js).
+export const MAP_OPS = Object.freeze(["front", "air", "naval", "programme"]);
 
 // Phase 7.1 : au plus tant de divisions par demande de recrutement.
 export const RECRUIT_MAX_PER_OP = 5;
@@ -86,6 +87,9 @@ const OP_ALIASES = Object.freeze({
   navy: "naval",
   marine: "naval",
   fleet: "naval",
+  programme: "programme",
+  program: "programme",
+  strategy: "programme",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -174,6 +178,13 @@ export const normalizeEconomyOp = (entry) => {
     const count = finite(entry.count ?? entry.amount);
     if (!enemy || !mission) return null;
     return { ...base, enemy, mission, ...(Number.isFinite(count) && count >= 1 ? { count: Math.floor(count) } : {}) };
+  }
+
+  // Phase 7.9 : le programme d'un pays IA, une phrase, pour son décideur local.
+  if (op === "programme") {
+    const label = text(entry.label ?? entry.programme ?? entry.text ?? entry.reason);
+    if (!label) return null;
+    return { op, polity, label: label.slice(0, 240) };
   }
 
   // Phase 7.1 : une demande de divisions (armies.js recruitDivision).

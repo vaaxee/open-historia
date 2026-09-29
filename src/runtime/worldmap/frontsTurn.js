@@ -15,7 +15,9 @@ import { atWar, warsFor } from "./warRules.js";
 const list = (value) => (Array.isArray(value) ? value : []);
 
 // `seas` (7.8) : { zones, stateSeas } de la carte, ou null (pas de marine).
-export const applyFrontsForTurn = (world, { events = [], map, date = "", player = "", seas = null } = {}) => {
+// `orders` (7.9) : les ordres du décideur local, [{ kind: "front" | "air" |
+// "naval", op }], appliqués après ceux des événements et avant les défauts.
+export const applyFrontsForTurn = (world, { events = [], map, date = "", player = "", seas = null, orders = [] } = {}) => {
   if (!world?.hoi?.armies || !map) return { world, notes: [] };
   const wars = warsFor(world);
   const context = {
@@ -37,6 +39,14 @@ export const applyFrontsForTurn = (world, { events = [], map, date = "", player 
       context.armies = result.armies;
       for (const note of result.notes) notes.push({ kind: note.kind, text: `${event?.title ? `Event "${event.title}": ` : ""}${note.text}` });
     }
+  }
+  // 1 bis. Les ordres de front du décideur local (Jev).
+  for (const order of list(orders)) {
+    if (order?.kind !== "front") continue;
+    const result = applyFrontOps([order.op], context);
+    context.fronts = result.fronts;
+    context.armies = result.armies;
+    for (const note of result.notes) notes.push({ kind: note.kind, text: `Local decider: ${note.text}` });
   }
   // 2. Un front sans guerre se ferme ; ses divisions sont libérées.
   const open = [];
@@ -131,6 +141,7 @@ export const applyFrontsForTurn = (world, { events = [], map, date = "", player 
       for (const order of orders) run(order.kind, order.op, prefix);
     }
   }
+  for (const order of list(orders)) if (order?.kind === "air" || order?.kind === "naval") run(order.kind, order.op, "Local decider: ");
   for (const owner of Object.keys(sea.armies)) {
     if (player && owner.toLowerCase() === String(player).toLowerCase()) continue;
     const ops = defaultAirNavalOps(owner, {

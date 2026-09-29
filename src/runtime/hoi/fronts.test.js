@@ -136,7 +136,7 @@ test("a local decider (Jev) can later pick among orders the engine has already v
 
 test("wired: the schema offers 'front', and the turn applies the fronts after the engine's step", () => {
   const schemas = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplaySchemas.js"), "utf8");
-  assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval"\]/);
+  assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme"\]/);
   const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
   const engine = gameplay.indexOf("supplyFor: await supplyForTurn(impactedWorld),");
   // Test G: after this turn's wars are in the world, so a war declared this turn
@@ -145,10 +145,10 @@ test("wired: the schema offers 'front', and the turn applies the fronts after th
     ? gameplay.indexOf("const warMerge = applyWarUpdates({\n    world: worldWithImpacts,")
     : gameplay.indexOf("const warMerge = applyWarUpdates({\r\n    world: worldWithImpacts,");
   const capitulation = gameplay.indexOf("const capitulated = applyEngineCapitulations(worldWithImpacts, {");
-  const fronts = gameplay.indexOf("worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });");
+  const fronts = gameplay.indexOf("worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)), orders: result.localDecisions?.orders });");
   assert.ok(engine > 0 && wars > engine && capitulation > wars && fronts > capitulation);
   // And before the battles: the default defence runs on the starting world.
-  assert.match(gameplay, /const world = applyFrontsForTurn\(start, \{ map, seas, player: toCountryName\(normalizeString\(bundle\.game\?\.country\)\) \}\)\.world;/);
+  assert.match(gameplay, /const world = applyFrontsForTurn\(start, \{ map, seas, orders, player: toCountryName\(normalizeString\(bundle\.game\?\.country\)\) \}\)\.world;/);
 });
 
 test("an axis keeps its name, and a taken axis is cleared at the turn", () => {

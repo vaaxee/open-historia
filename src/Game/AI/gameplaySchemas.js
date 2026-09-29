@@ -817,9 +817,9 @@ const projectOpSchema = {
 // the receipt reports.
 const economyOpSchema = {
   type: "object",
-  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech; damage = bomb or sabotage a building; recruit = raise divisions from stock; front = open/set a front against an enemy at war; air/naval = send wings/fleets against it.",
+  description: "modifier = production ± for a time; stock = one-off resource change; line = set a line's military factories; research = advance a tech; damage = bomb or sabotage a building; recruit = raise divisions from stock; front = open/set a front vs an enemy at war; air/naval = wings/fleets vs it; programme = AI strategy (label).",
   properties: {
-    op: { type: "string", enum: ["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval"] },
+    op: { type: "string", enum: ["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme"] },
     template: textSchema("recruit: infanterie, blindes, artillerie, chasse, bombardement or flotte."),
     count: { type: "number", description: "recruit: 1-5; front/air/naval: units to send." },
     enemy: textSchema("front/air/naval: the enemy."),
@@ -830,7 +830,7 @@ const economyOpSchema = {
     value: { type: "number", description: "modifier: -0.5 to 0.5; research: 0-0.25 of its cost; damage: 0.1-0.5." },
     techId: textSchema("research: tech id."),
     days: { type: "number", description: "modifier: 1-365, default 30." },
-    label: textSchema("modifier: its cause; same label replaces."),
+    label: textSchema("modifier: cause, same label replaces; programme: 1 sentence."),
     resource: textSchema("stock: resource name."),
     amount: { type: "number", description: "stock: + added, - removed." },
     lineId: textSchema("line: id from [ÉCONOMIE]."),

@@ -29,6 +29,8 @@ release
 # copied in by the server (libraryStore.js); the stock world under
 # server/data/stock/ is downloaded by scripts/fetch-map-assets.mjs.
 server/data/
+# llama.cpp for Jev, the local decider (tools/llama/README.md): binaries, not committed.
+/tools/llama/bin/
 
 # Large world-map binaries — hosted as GitHub Release assets and downloaded by
 # scripts/fetch-map-assets.mjs, not committed (they used to be in Git LFS, whose

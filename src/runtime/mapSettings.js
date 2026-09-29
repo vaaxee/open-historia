@@ -74,6 +74,11 @@ export const MAP_SETTING_KEYS = {
     // match what the engine actually applied. ON by default — read with
     // getMapSettingDefaultOn. Off, the no-request guard (AI/claimGuard.js) holds alone.
     narrateAfterValidation: "ai_narrate_after_validation",
+    // Phase 7.9 : le décideur local (Jev sous llama-server, port 8081) choisit
+    // les ordres militaires des pays IA (runtime/hoi/localDecider.js). OFF by
+    // default — read with getMapSetting ; éteint, ou sans réponse du serveur,
+    // les règles du moteur décident.
+    localDecider: "ai_local_decider_jev",
 };
 
 // Families the label-font pickers suggest — Settings → Map and the game and
@@ -120,6 +125,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.narrateAfterValidation]: "Write the story after validation",
+    [MAP_SETTING_KEYS.localDecider]: "Local decider (Jev)",
 };
 
 export function setMapSetting(key, value) {

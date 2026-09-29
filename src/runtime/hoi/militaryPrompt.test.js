@@ -53,7 +53,7 @@ test("a foreign leader sees its own forces and its own fronts, never another arm
 
 test("wired: the turn, the advisor and the leaders get the block; the engine's battles are resolved before the AI writes", () => {
   const gameplay = read("Game", "AI", "gameplay.js");
-  const combat = gameplay.indexOf("const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep });");
+  const combat = gameplay.indexOf("const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });");
   const variables = gameplay.indexOf("const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {");
   assert.ok(combat > 0 && variables > combat, "resolved first, then handed to the prompt");
   assert.match(gameplay, /if \(segmentIndex === 0\) addEngineBattles\(candidate, context\.engineCombat, \{ world: bundle\.world, receipt: draft \}\);/);

@@ -106,7 +106,7 @@ export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = 
     lines.push("Naval battles and blockades of THIS period, decided by the engine (their events are written by the engine):", describeNaval(naval));
   }
   if (forTurn) {
-    lines.push("An AI country fights through its fronts: economyOps front (polity, enemy at war, posture hold/attack/breakthrough, count of divisions to send) and recruits from its stockpile with economyOps recruit (template, count). economyOps air (enemy, mission superiority/support, count of wings) and naval (enemy, mission escort/blockade/support/landing, count) send its aviation and fleets; the engine picks the front or sea zone. The engine resolves every battle.");
+    lines.push("An AI country fights through its fronts: economyOps front (polity, enemy at war, posture hold/attack/breakthrough, count of divisions to send) and recruits from its stockpile with economyOps recruit (template, count). economyOps air (enemy, mission superiority/support, count of wings) and naval (enemy, mission escort/blockade/support/landing, count) send its aviation and fleets; the engine picks the front or sea zone. economyOps programme (polity, label: one sentence) sets an AI country's strategy, which its local decider follows. The engine resolves every battle.");
   }
   return lines.filter(Boolean).join("\n");
 };

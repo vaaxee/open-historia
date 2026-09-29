@@ -113,6 +113,7 @@ registerSettingsSnapshot("AI", () => {
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Write the story after validation", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.narrateAfterValidation))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
+        ["Local decider (Jev)", onOff(getMapSetting(MAP_SETTING_KEYS.localDecider))],
         ["Record AI telemetry", onOff(isTelemetryEnabled())],
         ["Rate AI generations", onOff(isRatingEnabled())],
     );

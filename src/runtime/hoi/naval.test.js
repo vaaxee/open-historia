@@ -289,7 +289,7 @@ test("the AIs read the air and the sea; the schema offers the orders; the turn r
   const land = gameplay.indexOf("const combat = resolveCombat({", naval);
   assert.ok(naval > 0 && land > naval, "the sea first, then the land (landings use the naval support)");
   assert.match(gameplay, /blockades: normalizeArray\(combat\?\.naval\?\.blockades\),/);
-  assert.match(gameplay, /applyFrontsForTurn\(world, \{ events, map: buildWarMap\(\{ world, \.\.\.context \}\), date, player, seas: await seasForTurn\(\) \}\)/);
+  assert.match(gameplay, /applyFrontsForTurn\(world, \{ events, map: buildWarMap\(\{ world, \.\.\.context \}\), date, player, seas: await seasForTurn\(\), orders: normalizeArray\(orders\) \}\)/);
   const server = fs.readFileSync(path.join(here, "..", "..", "..", "server", "worldMap.js"), "utf8");
   assert.match(server, /app\.get\("\/api\/worldmap\/seas"/);
 });

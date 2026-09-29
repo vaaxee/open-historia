@@ -14,6 +14,7 @@
     "build:web": "node scripts/seed-web-defaults.mjs && vite build --mode web --outDir dist-web --emptyOutDir",
     "build:site": "node scripts/seed-web-defaults.mjs && vite build --mode web --base /play/ --outDir dist-web --emptyOutDir && node scripts/assemble-site.mjs",
     "lint": "eslint .",
+    "jev": "node scripts/jev/start-server.mjs",
     "preview": "vite preview",
     "preview:web": "vite preview --outDir dist-web",
     "test": "node --test \"server/**/*.test.js\" \"src/**/*.test.js\" \"scripts/**/*.test.js\"",

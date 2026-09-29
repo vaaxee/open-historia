@@ -15,7 +15,10 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { advanceHoiLayer, findNationKey, refreshBuildingBonuses } from "../../runtime/hoi/engine.js";
-import { applyEconomyOpsFromEvents } from "../../runtime/hoi/economyOps.js";
+import { applyEconomyOps, applyEconomyOpsFromEvents, normalizeEconomyOp } from "../../runtime/hoi/economyOps.js";
+import { getFrontDecider, setFrontDecider } from "../../runtime/hoi/fronts.js";
+import { createJevClient } from "../../runtime/hoi/jev.js";
+import { runLocalDecisions, updateDecisionMemory } from "../../runtime/hoi/localDecider.js";
 import { HOI_EQUIPMENT, findIndustrialSites, pickHoiSeries } from "../../runtime/hoi/presets.js";
 import {
   collectHoiResources,
@@ -112,6 +115,7 @@ import {
 import { createForeignPlaceFinder, createOwnerMismatchCheck, describeOwnerMismatchFeedback, describeOwnerMismatchReceipt } from "./territoryOwnerCheck.js";
 import {
   atWar,
+  enemiesOf,
   coBelligerents,
   capitulationEvent,
   capitulationRecord,
@@ -6058,6 +6062,73 @@ const releaseLandingDivisions = (armies) => Object.fromEntries(Object.entries(ar
   divisions: normalizeArray(army?.divisions).map((division) => (String(division?.frontId ?? "").startsWith("landing-") ? { ...division, frontId: "" } : division)),
 }]));
 
+// Phase 7.9 : le décideur local (Jev, runtime/hoi/jev.js et localDecider.js).
+// Activé dans Réglages > IA ; il est branché par setFrontDecider et lu par
+// getFrontDecider. Éteint, sans armées, hors de la carte mondiale ou si
+// llama-server ne répond pas, il ne fait rien : les règles du moteur décident.
+// Renvoie { orders, decisions, ms, stopped, asked, queued } ou null.
+const runLocalDeciderForJump = async (bundle, { date = "" } = {}) => {
+  try {
+    if (!getMapSetting(MAP_SETTING_KEYS.localDecider)) { setFrontDecider(null); return null; }
+    const world = bundle?.world;
+    if (!world?.hoi?.armies) return null;
+    const context = await armyMapContext(world);
+    if (!context) return null;
+    const client = createJevClient();
+    if (!(await client.health())) {
+      setFrontDecider(null);
+      return { orders: [], decisions: [], ms: 0, stopped: "the local decider did not answer (llama-server on port 8081); the engine's rules decided", asked: 0, queued: 0 };
+    }
+    setFrontDecider((polity, { sheet, question, options }) => client.score({ state: sheet, question, options }));
+    const decide = getFrontDecider();
+    const wars = warsFor(world);
+    const sideNames = (polity) => [...new Set(wars.filter((war) => war.status === "active")
+      .flatMap((war) => (war.sideA.includes(polity) ? war.sideA : war.sideB.includes(polity) ? war.sideB : [])))];
+    return await runLocalDecisions(world, {
+      decide,
+      map: buildWarMap({ world, ...context }),
+      seas: await seasForTurn(),
+      date,
+      player: toCountryName(normalizeString(bundle.game?.country)),
+      enemiesOf: (polity) => enemiesOf(wars, polity),
+      alliesOf: sideNames,
+      atWar: (a, b) => atWar(wars, a, b),
+    });
+  } catch (error) {
+    console.warn("[local decider] no decision this turn; the engine's rules decide.", error);
+    return null;
+  }
+};
+
+// Après le tour : la mémoire des pays (décisions, résultats, programmes fixés
+// par la grande IA) et les recrues que le décideur a choisies. Le reçu dit ce
+// qui a été décidé et en combien de temps.
+const applyLocalDecisionsAfterTurn = (world, events, local, { date = "", receipt = null } = {}) => {
+  if (!world?.hoi?.armies) return world;
+  const programmes = normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.economyOps))
+    .map(normalizeEconomyOp).filter((op) => op?.op === "programme");
+  if (!local && !programmes.length && !world.hoi.jevMemory) return world;
+  let hoi = {
+    ...world.hoi,
+    jevMemory: updateDecisionMemory(world.hoi.jevMemory ?? {}, {
+      decisions: normalizeArray(local?.decisions), battles: normalizeArray(world.hoi.lastBattles), programmes, date,
+    }),
+  };
+  const recruits = normalizeArray(local?.orders).filter((order) => order?.kind === "recruit").map((order) => order.op);
+  if (recruits.length) {
+    const applied = applyEconomyOps(hoi, recruits, { date, title: "Local decider" });
+    hoi = applied.hoi;
+    for (const note of applied.notes) noteReceipt(receipt, note.kind, note.text);
+  }
+  if (local) {
+    const count = normalizeArray(local.decisions).length;
+    const average = count ? Math.round(local.ms / count) : 0;
+    noteReceipt(receipt, "adjusted", `Local decider (Jev): ${count} decision(s) of ${local.queued} possible in ${(local.ms / 1000).toFixed(1)} s${count ? ` (${average} ms each)` : ""}${local.stopped ? `; stopped: ${local.stopped}` : ""}.`);
+    hoi = { ...hoi, lastLocalDecisions: { date, ms: local.ms, stopped: local.stopped, decisions: normalizeArray(local.decisions).map(({ polity, question, choice, scores, ms }) => ({ polity, question, choice, scores, ms })) } };
+  }
+  return { ...world, hoi };
+};
+
 // Phase 7.8 : les zones de mer de la carte, ou null (pas de marine sans elles).
 const seasForTurn = async () => {
   try {
@@ -6087,10 +6158,10 @@ const supplyForTurn = async (world) => {
 // n'écrive (runtime/hoi/combat.js), sur le monde de départ : leurs fiches vont au
 // prompt, leurs événements dans la réponse (addEngineBattles), leurs pertes aux
 // armées à l'application. Null sans front engagé, hors de la carte mondiale.
-const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) => {
+const resolveCombatForJump = async (bundle, { originDate = "", days = 7, orders = [] } = {}) => {
   try {
     const start = bundle?.world;
-    if (!normalizeArray(start?.hoi?.fronts).length && !normalizeArray(start?.hoi?.navalMissions).length && !normalizeArray(start?.hoi?.landings).length) return null;
+    if (!normalizeArray(start?.hoi?.fronts).length && !normalizeArray(start?.hoi?.navalMissions).length && !normalizeArray(start?.hoi?.landings).length && !normalizeArray(orders).length) return null;
     const context = await armyMapContext(start);
     if (!context) return null;
     const seas = await seasForTurn();
@@ -6100,7 +6171,7 @@ const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) 
     // refait, à l'identique, quand le tour s'applique ; de même pour les escadres
     // et les flottes des pays IA (7.8).
     const map = buildWarMap({ world: start, ...context });
-    const world = applyFrontsForTurn(start, { map, seas, player: toCountryName(normalizeString(bundle.game?.country)) }).world;
+    const world = applyFrontsForTurn(start, { map, seas, orders, player: toCountryName(normalizeString(bundle.game?.country)) }).world;
     const wars = warsFor(world);
     const seed = `${normalizeString(bundle.game?.startDate)}|${normalizeString(bundle.game?.country)}`;
     // Les forts de la carte, par état (le plus fort l'emporte).
@@ -6203,11 +6274,11 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
 // Phase 7.3 : les fronts après les impacts du tour (runtime/worldmap/frontsTurn.js) :
 // ordres de front des IA, fronts sans guerre fermés, divisions redéployées sur
 // la ligne. Le reçu dit ce qui a été refusé.
-const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null, player = "" } = {}) => {
+const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null, player = "", orders = [] } = {}) => {
   try {
     const context = await armyMapContext(world);
     if (!context) return world;
-    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date, player, seas: await seasForTurn() });
+    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date, player, seas: await seasForTurn(), orders: normalizeArray(orders) });
     for (const note of result.notes) noteReceipt(receipt, note.kind, note.text);
     return result.world;
   } catch (error) {
@@ -7735,7 +7806,9 @@ const applySimulationResult = async ({
   // Phase 7.3 : les fronts, une fois les guerres du tour entrées dans le monde —
   // test G : une guerre déclarée ce tour-ci n'était vue qu'au tour suivant, et
   // la Pologne n'a ouvert son front qu'après la première bataille.
-  worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
+  worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)), orders: result.localDecisions?.orders });
+  // Phase 7.9 : la mémoire des pays IA pour leur décideur local, et ses recrues.
+  worldWithImpacts = applyLocalDecisionsAfterTurn(worldWithImpacts, freshEvents, result.localDecisions, { date: nextGame.gameDate, receipt });
   // Storylines last: they read the wars and relations as this turn left them.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
@@ -13529,6 +13602,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     receipt: state.receipt,
     // Phase 7.5 : ce que les batailles du moteur font aux armées, appliqué avec le tour.
     engineCombat: context.engineCombat ?? null,
+    // Phase 7.9 : les décisions du décideur local (Jev), appliquées avec le tour.
+    localDecisions: context.localDecisions ?? null,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -13607,7 +13682,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // Phase 7.4-7.5 : le moteur livre les batailles de la période avant que l'IA
   // n'écrive ; leurs fiches vont au prompt (militarySummary), leurs événements
   // dans la réponse, leurs pertes aux armées (resolveCombatForJump).
-  const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep });
+  // Phase 7.9 : le décideur local (Jev) choisit d'abord les ordres des pays IA,
+  // s'il est activé et répond ; les batailles se livrent ensuite avec eux.
+  const localDecisions = await runLocalDeciderForJump(bundle, { date: originDate });
+  const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });
   const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
@@ -13659,6 +13737,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     proposalVerdicts: proposals.verdicts,
     // The engine's battles for this period (resolveCombatForJump), or null.
     engineCombat,
+    // The local decider's orders and decisions (runLocalDeciderForJump), or null.
+    localDecisions,
     safeDays,
     segmentDays,
     targetDate,
