@@ -5,6 +5,7 @@ import { sheetWords } from "./battleSheet.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
 import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
 import { jevChoiceText } from "./frontsPanelText.js";
+import { focusPanelModel, politicsPanelModel } from "./focusPoliticsModel.js";
 
 const box = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", marginTop: "0.8rem", padding: "0.65rem 0.8rem" };
 const heading = { color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", marginBottom: "0.4rem", textTransform: "uppercase" };
@@ -22,8 +23,20 @@ const MilitaryStats = ({ world, targetCountry }) => {
     const words = sheetWords(language);
     const produced = Object.entries(stats.produced).filter(([, count]) => count > 0);
     const reserve = Object.entries(stats.stockpile).filter(([, count]) => count > 0);
+    // Phase 8 : la politique et le focus national du pays consulté.
+    const politics = politicsPanelModel(world, targetCountry, { language });
+    const focus = focusPanelModel(world, targetCountry, { language });
     return (
         <div>
+            {politics && (
+                <div style={box}>
+                    <div style={heading}>Politics</div>
+                    <div style={row}><span>In power</span><span data-no-translate="">{politics.ideologyName}</span></div>
+                    <div style={row}><span>Stability / war support</span><span data-no-translate="">{Math.round(politics.stability)} % / {Math.round(politics.warSupport)} %</span></div>
+                    {politics.nextElection && <div style={row}><span>Next election</span><span data-no-translate="">{politics.nextElection}</span></div>}
+                    <div style={row}><span>National focus</span><span data-no-translate="">{focus?.current?.name ?? "—"}</span></div>
+                </div>
+            )}
             <div style={box}>
                 <div style={heading}>Armed forces</div>
                 <div style={row}><span>Divisions and wings</span><span data-no-translate="">{stats.totalDivisions}</span></div>

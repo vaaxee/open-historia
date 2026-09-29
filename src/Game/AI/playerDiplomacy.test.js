@@ -92,7 +92,7 @@ test("wired: proposals are put before the prompt is built, answered with Realpol
   const gameplay = fs.readFileSync(path.join(here, "gameplay.js"), "utf8");
   const put = gameplay.indexOf("const proposals = await putPlayerProposals(bundle, { signal });");
   // The told orders ride in the prompt's bundle (with the engine's battles, phase 7.5).
-  const variables = gameplay.indexOf("const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {");
+  const variables = gameplay.indexOf("const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat, enginePolitics }, {");
   assert.ok(put > 0 && variables > put);
   const helper = gameplay.slice(gameplay.indexOf("const putPlayerProposals = async"), gameplay.indexOf("const putPlayerProposals = async") + 3000);
   assert.match(helper, /await sendDiplomaticMessageOnceOff\(\{\s*playerMessage: `\$\{message\}\\n\\n\$\{VERDICT_INSTRUCTION\}`/);

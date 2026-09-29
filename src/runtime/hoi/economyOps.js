@@ -45,10 +45,11 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme"]);
-// Les opérations appliquées au tour, avec la carte (frontsTurn.js), et le
-// programme d'un pays pour son décideur local (localDecider.js).
-export const MAP_OPS = Object.freeze(["front", "air", "naval", "programme"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme", "focus"]);
+// Les opérations appliquées au tour, avec la carte (frontsTurn.js), le
+// programme d'un pays pour son décideur local (localDecider.js) et ses focus
+// (phase 8, focus.js).
+export const MAP_OPS = Object.freeze(["front", "air", "naval", "programme", "focus"]);
 
 // Phase 7.1 : au plus tant de divisions par demande de recrutement.
 export const RECRUIT_MAX_PER_OP = 5;
@@ -90,6 +91,8 @@ const OP_ALIASES = Object.freeze({
   programme: "programme",
   program: "programme",
   strategy: "programme",
+  focus: "focus",
+  nationalfocus: "focus",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -178,6 +181,23 @@ export const normalizeEconomyOp = (entry) => {
     const count = finite(entry.count ?? entry.amount);
     if (!enemy || !mission) return null;
     return { ...base, enemy, mission, ...(Number.isFinite(count) && count >= 1 ? { count: Math.floor(count) } : {}) };
+  }
+
+  // Phase 8 : un focus national, de l'arbre (focusId) ou sur mesure (label, days,
+  // effects : « civil+2; stability+5 »), que le moteur valide (focus.js).
+  if (op === "focus") {
+    const focusId = text(entry.focusId ?? entry.id);
+    const label = text(entry.label ?? entry.name);
+    const effects = text(entry.effects);
+    const days = finite(entry.days);
+    if (!focusId && !(label && effects)) return null;
+    return {
+      ...base,
+      ...(focusId ? { focusId } : {}),
+      ...(label ? { label: label.slice(0, 80) } : {}),
+      ...(effects ? { effects: effects.slice(0, 240) } : {}),
+      ...(Number.isFinite(days) ? { days } : {}),
+    };
   }
 
   // Phase 7.9 : le programme d'un pays IA, une phrase, pour son décideur local.

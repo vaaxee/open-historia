@@ -136,7 +136,7 @@ test("a local decider (Jev) can later pick among orders the engine has already v
 
 test("wired: the schema offers 'front', and the turn applies the fronts after the engine's step", () => {
   const schemas = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplaySchemas.js"), "utf8");
-  assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme"\]/);
+  assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme", "focus"\]/);
   const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
   const engine = gameplay.indexOf("supplyFor: await supplyForTurn(impactedWorld),");
   // Test G: after this turn's wars are in the world, so a war declared this turn

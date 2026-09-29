@@ -17,6 +17,7 @@ import { isSeal, newSeal, openExchange } from "../../runtime/spySeal.js";
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { Actions } from "./actions";
 import { Fronts, useArmiesActive } from "./fronts.jsx";
+import { FocusDock, PoliticsDock } from "./focusPolitics.jsx";
 import { Projects } from "./projects";
 import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, dockWidthFor } from "./hudDock.js";
 import { Production, useHoiLayerActive } from "./production.jsx";
@@ -3395,10 +3396,13 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     // Phase 7.7 : le panneau Fronts, pour une partie qui a des armées.
     const hasArmies = useArmiesActive();
     const [hoveredFronts, setHoveredFronts] = useState(false);
+    // Phase 8 : les panneaux Focus et Politique, pour une partie qui a world.hoi.
+    const [hoveredFocus, setHoveredFocus] = useState(false);
+    const [hoveredPolitics, setHoveredPolitics] = useState(false);
     // The dock grows by one button per launcher; its geometry lives in hudDock.js
     // so the Search control beside it moves with it.
     return (
-        <div style={{ position: "fixed", bottom: `${DOCK_BOTTOM_REM}rem`, left: `${DOCK_LEFT_REM}rem`, height: `${DOCK_HEIGHT_REM}rem`, width: dockWidthFor((hasProduction ? 2 : 0) + (hasArmies ? 1 : 0)), gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
+        <div style={{ position: "fixed", bottom: `${DOCK_BOTTOM_REM}rem`, left: `${DOCK_LEFT_REM}rem`, height: `${DOCK_HEIGHT_REM}rem`, width: dockWidthFor((hasProduction ? 4 : 0) + (hasArmies ? 1 : 0)), gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
         <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
         <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
         <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
@@ -3410,6 +3414,12 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
         )}
         {hasArmies && (
             <Fronts hovered={hoveredFronts} setHovered={setHoveredFronts} isOpen={activePanel === "fronts"} onToggle={() => onTogglePanel("fronts")} />
+        )}
+        {hasProduction && (
+            <FocusDock hovered={hoveredFocus} setHovered={setHoveredFocus} isOpen={activePanel === "focus"} onToggle={() => onTogglePanel("focus")} />
+        )}
+        {hasProduction && (
+            <PoliticsDock hovered={hoveredPolitics} setHovered={setHoveredPolitics} isOpen={activePanel === "politics"} onToggle={() => onTogglePanel("politics")} />
         )}
         </div>
     );

@@ -26,6 +26,7 @@ import { templatesFor } from "./armies.js";
 import { frontLine, frontOptions, normalizeFronts } from "./fronts.js";
 import { normalizeAirMissions } from "./air.js";
 import { enemyDominates, normalizeNavalMissions } from "./naval.js";
+import { availableFocuses, normalizeFocusState } from "./focus.js";
 
 export const LOCAL_DECIDER_TUNING = Object.freeze({
   maxDecisionsPerTurn: 20,
@@ -155,6 +156,21 @@ export const decisionQuestions = (polity, context) => {
     });
   }
 
+  // 3 bis. Phase 8 : le prochain focus national, s'il n'en a pas en cours.
+  if (context.focus !== undefined) {
+    const state = normalizeFocusState(context.focus?.[owner]);
+    const options = state.current ? [] : availableFocuses(owner, state, context.politics?.[owner] ?? null).slice(0, LOCAL_DECIDER_TUNING.maxOptions);
+    if (options.length > 1) {
+      questions.push({
+        id: "focus",
+        kind: "focus",
+        importance: 1,
+        question: `Which national focus should ${owner} pursue next?`,
+        options: options.map((focus) => ({ text: focus.name.en, orders: [{ kind: "focus", op: { polity: owner, focusId: focus.id } }] })),
+      });
+    }
+  }
+
   // 4. Le recrutement, dans ce que la réserve permet.
   const stock = army?.stockpile ?? {};
   const affordable = Object.entries(templates).filter(([, spec]) => Object.entries(spec.equipment).every(([item, need]) => Number(stock[item] ?? 0) >= need)
@@ -180,6 +196,8 @@ export const decisionSheet = (polity, { memory = {}, allies = [], grudges = [], 
   const head = [
     `You are ${polity}.`,
     `Programme: ${clean(memory.programme) || "defend the country and its interests"}.`,
+    // Phase 8 : ce que son régime et ses focus disent de lui (focus.js programmeFor).
+    ...(clean(memory.policy) ? [`Policy: ${clean(memory.policy)}.`] : []),
     `Allies: ${allies.length ? allies.join(", ") : "none"}.`,
     `Grudges: ${grudges.length ? grudges.join(", ") : "none"}.`,
     "Recent decisions:",
@@ -220,6 +238,8 @@ export const runLocalDecisions = async (world, { decide, map, seas = null, date 
   const context = {
     armies: hoi.armies, fronts: hoi.fronts, templates, map, seas, seaControl: hoi.seaControl,
     airMissions: hoi.airMissions, navalMissions: hoi.navalMissions, enemiesOf, atWar, date,
+    // Phase 8 : les focus et la politique, si la partie en a.
+    ...(hoi.focus || hoi.politics ? { focus: hoi.focus ?? {}, politics: hoi.politics ?? {} } : {}),
   };
   // Toutes les questions, rangées : priorité du pays, puis importance de la question.
   const queue = [];
@@ -264,7 +284,8 @@ export const runLocalDecisions = async (world, { decide, map, seas = null, date 
 // La mémoire après le tour : les décisions prises (10 au plus par pays), leur
 // résultat (les batailles de ce pays pendant le tour), et le programme que la
 // grande IA a fixé (economyOps « programme »).
-export const updateDecisionMemory = (memory = {}, { decisions = [], battles = [], programmes = [], date = "" } = {}) => {
+// `policies` (phase 8) : { [pays]: phrase }, le programme tiré du régime et des focus.
+export const updateDecisionMemory = (memory = {}, { decisions = [], battles = [], programmes = [], policies = {}, date = "" } = {}) => {
   const out = { ...memory };
   const outcomeFor = (polity) => {
     const mine = list(battles).filter((battle) => key(battle.attacker) === key(polity) || key(battle.defender) === key(polity));
@@ -293,6 +314,10 @@ export const updateDecisionMemory = (memory = {}, { decisions = [], battles = []
     const polity = clean(programme.polity);
     if (!polity || !clean(programme.label)) continue;
     out[polity] = { ...(out[polity] ?? { decisions: [] }), programme: clean(programme.label).slice(0, 240) };
+  }
+  for (const [polity, policy] of Object.entries(policies ?? {})) {
+    if (!clean(policy)) continue;
+    out[polity] = { ...(out[polity] ?? { programme: "", decisions: [] }), policy: clean(policy).slice(0, 240) };
   }
   return out;
 };

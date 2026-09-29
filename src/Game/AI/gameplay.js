@@ -19,6 +19,8 @@ import { applyEconomyOps, applyEconomyOpsFromEvents, normalizeEconomyOp } from "
 import { getFrontDecider, setFrontDecider } from "../../runtime/hoi/fronts.js";
 import { createJevClient } from "../../runtime/hoi/jev.js";
 import { runLocalDecisions, updateDecisionMemory } from "../../runtime/hoi/localDecider.js";
+import { advancePolitics, applyPoliticsEffects, canDeclareWar, enableHoiPolitics, politicsEvent } from "../../runtime/hoi/politics.js";
+import { advanceFocuses, applyFocusEffects, customFocus, focusTreeFor, normalizeFocusState, programmeFor, startFocus } from "../../runtime/hoi/focus.js";
 import { HOI_EQUIPMENT, findIndustrialSites, pickHoiSeries } from "../../runtime/hoi/presets.js";
 import {
   collectHoiResources,
@@ -5946,6 +5948,8 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
     events: candidate.events,
     date,
     language,
+    // Phase 8 : le soutien à la guerre du joueur (politics.js).
+    canDeclare: (polity) => canDeclareWar(bundle?.world?.hoi, polity),
   });
   // The answer announced the war itself: that war is the player's, and protected.
   for (const { id, index } of announced ?? []) {
@@ -6065,6 +6069,146 @@ const armyMapContext = async (world) => {
   return { catalog, info, capitals };
 };
 
+// Phase 8 : la politique et les focus de la période, calculés par le moteur AVANT
+// que l'IA n'écrive (comme les batailles) : élections et coups dus, focus qui
+// finissent, focus suivants des pays IA (choisis par le décideur local s'il en a
+// donné, sinon par l'ordre de leur arbre). Leurs événements vont dans la réponse,
+// leur résumé au prompt ; le nouvel état et les effets des focus s'appliquent avec
+// le tour. Null sans couche HOI.
+const resolvePoliticsForJump = (bundle, { originDate = "", targetDate = "", orders = [] } = {}) => {
+  try {
+    const world = bundle?.world;
+    if (!world?.hoi?.nations || !originDate || !targetDate) return null;
+    const hoi = world.hoi.politics ? world.hoi : enableHoiPolitics(world.hoi, { countryStats: world.countryStats, date: originDate });
+    const wars = warsFor(world).filter((war) => war.status === "active");
+    const politics = {};
+    const changes = [];
+    for (const [polity, current] of Object.entries(hoi.politics ?? {})) {
+      const aggressor = wars.some((war) => war.sideA.includes(polity));
+      const atWarNow = aggressor || wars.some((war) => war.sideB.includes(polity));
+      const result = advancePolitics(current, { fromDate: originDate, toDate: targetDate, war: { atWar: atWarNow, aggressor } });
+      politics[polity] = result.politics;
+      for (const change of result.changes) changes.push({ polity, ...change });
+    }
+    // Le focus que le décideur local a choisi pour un pays, s'il en a choisi un.
+    const picked = new Map(normalizeArray(orders).filter((order) => order?.kind === "focus").map((order) => [order.op.polity, order.op.focusId]));
+    const advanced = advanceFocuses({ ...hoi, politics }, {
+      toDate: targetDate,
+      player: toCountryName(normalizeString(bundle.game?.country)),
+      choose: (polity, available) => (available.some((focus) => focus.id === picked.get(polity)) ? picked.get(polity) : null),
+    });
+    return {
+      politics,
+      focus: advanced.focus,
+      completed: advanced.completed.map(({ polity, focus, date }) => ({ polity, focusId: focus.id, name: focus.name, date })),
+      changes,
+    };
+  } catch (error) {
+    console.warn("[politics] the period's politics could not be resolved.", error);
+    return null;
+  }
+};
+
+// Phase 8 : les ordres « focus » de la réponse (economyOps) pour les pays IA :
+// prendre un focus de l'arbre, ou ajouter un focus sur mesure validé par le
+// moteur (focus.js customFocus) et le commencer si le pays n'en a pas en cours.
+// Le joueur choisit les siens dans le panneau Focus.
+const applyFocusOpsAfterTurn = (world, events, { date = "", receipt = null, player = "" } = {}) => {
+  if (!world?.hoi?.nations) return world;
+  const ops = normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.economyOps)).map(normalizeEconomyOp).filter((op) => op?.op === "focus");
+  if (!ops.length) return world;
+  const focus = { ...(world.hoi.focus ?? {}) };
+  for (const op of ops) {
+    const polity = Object.keys(world.hoi.nations).find((name) => name.toLowerCase() === op.polity.toLowerCase());
+    if (!polity) { noteReceipt(receipt, "dropped", `focus — "${op.polity}" has no tracked economy.`); continue; }
+    if (player && polity.toLowerCase() === player.toLowerCase()) { noteReceipt(receipt, "dropped", `focus — the player chooses ${polity}'s focuses.`); continue; }
+    let state = normalizeFocusState(focus[polity]);
+    let focusId = op.focusId ?? "";
+    if (!focusId) {
+      const custom = customFocus(polity, { label: op.label, days: op.days, effects: op.effects }, state);
+      noteReceipt(receipt, custom.note.kind, custom.note.text);
+      if (!custom.focus) continue;
+      state = { ...state, custom: [...state.custom, custom.focus] };
+      focusId = custom.focus.id;
+    }
+    if (!state.current) {
+      const started = startFocus(polity, state, focusId, { date, politics: world.hoi.politics?.[polity] ?? null });
+      noteReceipt(receipt, started.note.kind, started.note.text);
+      state = started.state;
+    }
+    focus[polity] = state;
+  }
+  return { ...world, hoi: { ...world.hoi, focus } };
+};
+
+// L'état politique et des focus que le moteur a calculé, porté sur le monde du
+// tour ; les effets de chaque focus achevé (usines, divisions, revendications…).
+// Un monde sans politique encore la reçoit (enableHoiPolitics), même sans jump.
+const applyEnginePolitics = (world, enginePolitics, { date = "" } = {}) => {
+  if (!world?.hoi?.nations) return world;
+  let next = world;
+  if (enginePolitics) {
+    next = { ...next, hoi: { ...next.hoi, politics: enginePolitics.politics, focus: enginePolitics.focus } };
+    const names = {};
+    for (const row of normalizeArray(getPrimedScenarioRegionCatalog())) if (row?.name) names[normalizeString(row.name).toLowerCase()] = row.id;
+    for (const done of normalizeArray(enginePolitics.completed)) {
+      const focus = focusTreeFor(done.polity, next.hoi.focus?.[done.polity]).find((entry) => entry.id === done.focusId);
+      if (!focus) continue;
+      next = applyFocusEffects(next, done.polity, focus, { date: done.date || date, resolveState: (name) => names[normalizeString(name).toLowerCase()] ?? "" }).world;
+    }
+  } else if (!next.hoi.politics) {
+    next = { ...next, hoi: enableHoiPolitics(next.hoi, { countryStats: next.countryStats, date }) };
+  }
+  return { ...next, hoi: applyPoliticsEffects(next.hoi) };
+};
+
+// Les événements de la politique dans la réponse du premier segment : élections,
+// coups d'État, focus achevés des grandes puissances et du joueur.
+const addEnginePolitics = (candidate, enginePolitics, { receipt = null, player = "" } = {}) => {
+  if (!enginePolitics || !candidate || !Array.isArray(candidate.events)) return;
+  const language = detectLanguage(candidate.events.map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
+  const nameOf = language === "fr" ? frenchPolityName : (name) => name;
+  const the = language === "fr" ? frenchPolityWithArticle : null;
+  const events = normalizeArray(enginePolitics.changes).map((change) => politicsEvent(change.polity, change, { language, nameOf, the }));
+  const major = new Set(["Germany", "Soviet Union", "France", "United Kingdom", "United States", "Italy", "Imperialist Japan", "Kuomintang China", "Poland", player].filter(Boolean));
+  for (const done of normalizeArray(enginePolitics.completed)) {
+    if (!major.has(done.polity)) continue;
+    const name = done.name?.[language] ?? done.name?.en ?? done.focusId;
+    events.push({
+      date: done.date,
+      title: language === "fr" ? `${capitalizeFirst(the(done.polity))} : « ${name} »` : `${done.polity}: "${name}"`,
+      description: language === "fr"
+        ? `${capitalizeFirst(the(done.polity))} achève son effort national « ${name} ».`
+        : `${done.polity} completes its national focus "${name}".`,
+      kind: "political", importance: "normal", notable: false, source: "engine", impacts: {},
+    });
+  }
+  let count = 0;
+  for (const event of events) {
+    const dated = candidate.events.findIndex((entry) => normalizeString(entry?.date) > normalizeString(event.date));
+    insertEventAt(candidate, { ...event, id: `engine-politics-${candidate.events.length + 1}` }, dated < 0 ? candidate.events.length : dated, EVENT_INDEX_DECODERS);
+    count += 1;
+  }
+  if (count) noteReceipt(receipt, "adjusted", `The engine decided ${normalizeArray(enginePolitics.changes).length} election(s) or coup(s) and ${normalizeArray(enginePolitics.completed).length} completed national focus(es) this period and added their events; narrate them, change none of their results.`);
+};
+
+// Phase 8 : sans assez de soutien, un pays ne déclare pas de guerre d'agression
+// (politics.js canDeclareWar). Une guerre que la réponse ouvre pour un tel
+// agresseur est retirée, et le reçu le dit ; un pays attaqué se défend toujours.
+const enforceWarSupport = (candidate, bundle, { receipt = null } = {}) => {
+  const hoi = bundle?.world?.hoi;
+  if (!hoi?.politics || !candidate) return;
+  const records = decodeWarUpdates(candidate.warUpdates);
+  const kept = records.filter((record) => {
+    if (normalizeString(record?.op) !== "start") return true;
+    const refused = normalizeArray(record.actors).map((actor) => ({ actor, check: canDeclareWar(hoi, actor) })).filter(({ check }) => !check.ok);
+    if (!refused.length) return true;
+    noteReceipt(receipt, "dropped", `The war ${normalizeString(record.id)} was not started: ${refused.map(({ check }) => check.reason).join("; ")}. Tell it as a war that did not happen (pressure, threats, mobilisation at most).`);
+    return false;
+  });
+  if (kept.length !== records.length) candidate.warUpdates = kept;
+};
+
 // Phase 7.8 : une division embarquée (frontId « landing-… ») redevient libre.
 const releaseLandingDivisions = (armies) => Object.fromEntries(Object.entries(armies ?? {}).map(([owner, army]) => [owner, {
   ...army,
@@ -6116,11 +6260,13 @@ const applyLocalDecisionsAfterTurn = (world, events, local, { date = "", receipt
   if (!world?.hoi?.armies) return world;
   const programmes = normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.economyOps))
     .map(normalizeEconomyOp).filter((op) => op?.op === "programme");
-  if (!local && !programmes.length && !world.hoi.jevMemory) return world;
+  if (!local && !programmes.length && !world.hoi.jevMemory && !world.hoi.politics) return world;
+  // Phase 8 : le programme de chaque pays se déduit aussi de son régime et de ses focus.
+  const policies = Object.fromEntries(Object.keys(world.hoi.politics ?? {}).map((polity) => [polity, programmeFor(polity, world.hoi)]));
   let hoi = {
     ...world.hoi,
     jevMemory: updateDecisionMemory(world.hoi.jevMemory ?? {}, {
-      decisions: normalizeArray(local?.decisions), battles: normalizeArray(world.hoi.lastBattles), programmes, date,
+      decisions: normalizeArray(local?.decisions), battles: normalizeArray(world.hoi.lastBattles), programmes, policies, date,
     }),
   };
   const recruits = normalizeArray(local?.orders).filter((order) => order?.kind === "recruit").map((order) => order.op);
@@ -7637,6 +7783,10 @@ const applySimulationResult = async ({
       },
     };
   }
+  // Phase 8 : la politique et les focus de la période (resolvePoliticsForJump),
+  // puis les effets des focus achevés et ceux de la politique (production,
+  // main-d'œuvre), avant que l'économie n'avance.
+  impactedWorld = applyEnginePolitics(impactedWorld, result.enginePolitics, { date: nextGame.gameDate });
   // Couche HOI4 (src/runtime/hoi/) : le moteur fait avancer économie et production
   // sur les jours du saut, APRÈS les impacts IA pour que ceux-ci comptent dès ce
   // tour. Inerte tant que la partie n'a pas de world.hoi. Recalculé depuis
@@ -7839,6 +7989,8 @@ const applySimulationResult = async ({
   worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)), orders: result.localDecisions?.orders });
   // Phase 7.9 : la mémoire des pays IA pour leur décideur local, et ses recrues.
   worldWithImpacts = applyLocalDecisionsAfterTurn(worldWithImpacts, freshEvents, result.localDecisions, { date: nextGame.gameDate, receipt });
+  // Phase 8 : les focus que la réponse choisit ou propose pour les pays IA.
+  worldWithImpacts = applyFocusOpsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
   // Storylines last: they read the wars and relations as this turn left them.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
@@ -12894,7 +13046,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // ordered and the answer left out is started by the engine, with its own
           // event, before the war rules read the answer; an order that names nobody
           // is refused in the receipt. The first segment only: orders are the round's.
+          // Phase 8 : pas de guerre d'agression sans soutien (politics.js).
+          if (segmentIndex === 0) enforceWarSupport(candidate, bundle, { receipt: draft });
           if (segmentIndex === 0) addPlayerWars(candidate, bundle, { date: addIsoDays(state.segmentOrigin, 1) || state.segmentOrigin, receipt: draft });
+          // Phase 8 : élections, coups d'État et focus achevés, décidés par le moteur.
+          if (segmentIndex === 0) addEnginePolitics(candidate, context.enginePolitics, { receipt: draft, player: toCountryName(normalizeString(bundle.game?.country)) });
           // The engine's battles of the period, as its own events (addEngineBattles).
           if (segmentIndex === 0) addEngineBattles(candidate, context.engineCombat, { world: bundle.world, receipt: draft });
           // The player's proposals were answered before the turn (playerDiplomacy.js):
@@ -13634,6 +13790,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     engineCombat: context.engineCombat ?? null,
     // Phase 7.9 : les décisions du décideur local (Jev), appliquées avec le tour.
     localDecisions: context.localDecisions ?? null,
+    // Phase 8 : la politique et les focus de la période, appliqués avec le tour.
+    enginePolitics: context.enginePolitics ?? null,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -13716,7 +13874,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // s'il est activé et répond ; les batailles se livrent ensuite avec eux.
   const localDecisions = await runLocalDeciderForJump(bundle, { date: originDate });
   const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });
-  const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {
+  // Phase 8 : élections, coups, focus de la période (resolvePoliticsForJump).
+  const enginePolitics = resolvePoliticsForJump(bundle, { originDate, targetDate, orders: localDecisions?.orders });
+  const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat, enginePolitics }, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
@@ -13769,6 +13929,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     engineCombat,
     // The local decider's orders and decisions (runLocalDeciderForJump), or null.
     localDecisions,
+    // The period's politics and focuses (resolvePoliticsForJump), or null.
+    enginePolitics,
     safeDays,
     segmentDays,
     targetDate,

@@ -112,6 +112,9 @@ export const normalizeArmy = (value) => {
     manpower: {
       available: Math.max(0, Math.round(num(source.manpower?.available))),
       growthPerMonth: Math.max(0, Math.round(num(source.manpower?.growthPerMonth))),
+      // Phase 8 : le soutien à la guerre (politics.js) accélère ou freine la
+      // croissance, de 0,5 à 1,5 ; 1 sans politique.
+      growthFactor: Math.round(Math.min(1.5, Math.max(0.5, num(source.manpower?.growthFactor, 1))) * 100) / 100,
     },
     divisions: (Array.isArray(source.divisions) ? source.divisions : []).map(normalizeDivision).filter(Boolean),
   };
@@ -143,7 +146,7 @@ export const growManpower = (army, days) => ({
   ...army,
   manpower: {
     ...army.manpower,
-    available: Math.round(army.manpower.available + army.manpower.growthPerMonth * (days / ARMY_TUNING.daysPerMonth)),
+    available: Math.round(army.manpower.available + army.manpower.growthPerMonth * (army.manpower.growthFactor ?? 1) * (days / ARMY_TUNING.daysPerMonth)),
   },
 });
 

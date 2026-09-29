@@ -82,7 +82,8 @@ const startsBetween = (record, a, b, canon = (name) => name) => clean(record?.op
 // events. When the answer already starts that war but none of the events it is
 // tied to announces it, the entry carries `existing` (the answer's record, whose
 // id the announcement takes) instead of a new war.
-export const planPlayerWars = ({ actions, world, player, warUpdates = [], events = [], date = "", language = "en" }) => {
+// `canDeclare(polity)` (phase 8, politics.js canDeclareWar) : { ok, reason }.
+export const planPlayerWars = ({ actions, world, player, warUpdates = [], events = [], date = "", language = "en", canDeclare = () => ({ ok: true }) }) => {
   const started = [];
   const refused = [];
   const planned = [];
@@ -98,6 +99,12 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
       continue;
     }
     if (atWarWith(world?.wars, player, target) || planned.some((other) => key(other) === key(target))) continue;
+    // Phase 8 : sans assez de soutien à la guerre, pas de guerre d'agression.
+    const allowed = canDeclare(player);
+    if (!allowed?.ok) {
+      refused.push({ action, reason: `${allowed.reason}: no war was started` });
+      continue;
+    }
     planned.push(target);
     const existing = list(warUpdates).find((record) => startsBetween(record, player, target, canon)) ?? null;
     if (existing && list(existing.eventIndexes).some((index) => eventDeclaresWar(list(events)[index]))) {

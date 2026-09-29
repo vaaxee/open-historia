@@ -89,6 +89,7 @@ import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { buildEconomyPromptBlock } from "../../runtime/hoi/engine.js";
 import { buildMilitaryPromptBlock } from "../../runtime/hoi/militaryPrompt.js";
+import { buildPoliticsPromptBlock } from "../../runtime/hoi/politicsPrompt.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -2825,6 +2826,8 @@ async function buildAdvisorSystemPrompt() {
         // les lit ; il ne les invente ni ne les corrige.
         buildEconomyPromptBlock(worldData, gameData?.country, { others: 4 }),
         buildMilitaryPromptBlock(worldData, gameData?.country, { others: 6 }),
+        // Phase 8 : la politique et les focus (runtime/hoi/politicsPrompt.js).
+        buildPoliticsPromptBlock(worldData, gameData?.country, { others: 6 }),
         ADVISOR_FORMATTING_DIRECTIVE,
     ].filter(Boolean);
     return `${rendered}\n\n${directives.join("\n\n")}`;
@@ -2934,7 +2937,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // Phase 7.5 : ce que ce gouvernement sait de ses propres forces, de ses fronts
     // et de ses batailles (runtime/hoi/militaryPrompt.js) — jamais le détail des
     // armées des autres.
-    const forces = buildMilitaryPromptBlock(worldData, speaker, { others: 0 });
+    const forces = [buildMilitaryPromptBlock(worldData, speaker, { others: 0 }), buildPoliticsPromptBlock(worldData, speaker, { others: 0 })].filter(Boolean).join("\n\n");
     const prompt = `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}${forces ? `\n\n${forces}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
     // [Realpolitik] (realpolitik.js): the leader weighs a proposal by reason of
     // state at the game's date, not by an assistant's morals. Appended here, not

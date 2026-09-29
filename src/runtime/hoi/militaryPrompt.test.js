@@ -54,7 +54,7 @@ test("a foreign leader sees its own forces and its own fronts, never another arm
 test("wired: the turn, the advisor and the leaders get the block; the engine's battles are resolved before the AI writes", () => {
   const gameplay = read("Game", "AI", "gameplay.js");
   const combat = gameplay.indexOf("const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });");
-  const variables = gameplay.indexOf("const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat }, {");
+  const variables = gameplay.indexOf("const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat, enginePolitics }, {");
   assert.ok(combat > 0 && variables > combat, "resolved first, then handed to the prompt");
   assert.match(gameplay, /if \(segmentIndex === 0\) addEngineBattles\(candidate, context\.engineCombat, \{ world: bundle\.world, receipt: draft \}\);/);
   assert.match(gameplay, /engineCombat: context\.engineCombat \?\? null,/);
@@ -66,5 +66,6 @@ test("wired: the turn, the advisor and the leaders get the block; the engine's b
   const main = read("Game", "AI", "main.jsx");
   assert.match(main, /buildMilitaryPromptBlock\(worldData, gameData\?\.country, \{ others: 6 \}\),/, "the advisor");
   assert.match(main, /buildEconomyPromptBlock\(worldData, gameData\?\.country, \{ others: 4 \}\),/, "and the production");
-  assert.match(main, /const forces = buildMilitaryPromptBlock\(worldData, speaker, \{ others: 0 \}\);/, "a leader");
+  // Phase 8 : un dirigeant lit aussi sa politique.
+  assert.match(main, /const forces = \[buildMilitaryPromptBlock\(worldData, speaker, \{ others: 0 \}\), buildPoliticsPromptBlock\(worldData, speaker, \{ others: 0 \}\)\]/, "a leader");
 });

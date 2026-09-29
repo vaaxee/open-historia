@@ -24,6 +24,7 @@ import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { buildEconomyPromptBlock } from "../../runtime/hoi/engine.js";
 import { buildMilitaryPromptBlock } from "../../runtime/hoi/militaryPrompt.js";
+import { buildPoliticsPromptBlock } from "../../runtime/hoi/politicsPrompt.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -2015,6 +2016,11 @@ export const buildPromptContext = async (bundle, {
       naval: bundle.engineCombat?.naval ?? null,
       forTurn: true,
     });
+    // Phase 8 : la politique et les focus, et ce que le moteur en a décidé pour ce tour.
+    const politics = buildPoliticsPromptBlock(bundle.world, normalizeString(bundle.game?.country), {
+      others: 10, enginePolitics: bundle.enginePolitics ?? null, forTurn: true,
+    });
+    if (politics) result.militarySummary = [result.militarySummary, politics].filter(Boolean).join("\n\n");
   }
 
   const worldBeforeRoundOne =

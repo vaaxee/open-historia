@@ -88,8 +88,9 @@ test("drawing on the map: a click adds a state, a second click takes it away, cl
 test("wired: the dock button with armies, the map click while drawing, the drawn states on the map", () => {
   const chat = read("GameUI", "chat.jsx");
   assert.match(chat, /\{hasArmies && \(\r?\n\s+<Fronts hovered=\{hoveredFronts\}/);
-  assert.match(chat, /width: dockWidthFor\(\(hasProduction \? 2 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
-  assert.match(read("GameUI", "search.jsx"), /besideDockLeftFor\(\(hasProduction \? 2 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
+  // Phase 8 : Focus et Politique, deux lanceurs de plus avec world.hoi.
+  assert.match(chat, /width: dockWidthFor\(\(hasProduction \? 4 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
+  assert.match(read("GameUI", "search.jsx"), /besideDockLeftFor\(\(hasProduction \? 4 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
   const layer = read("Map", "WorldMapLayer.jsx");
   assert.match(layer, /if \(!getFrontDraw\(\)\.drawing\) return;/);
   assert.match(layer, /if \(stateId\) toggleFrontDrawState\(stateId\);/);
