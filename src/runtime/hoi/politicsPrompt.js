@@ -7,7 +7,7 @@
 // tour, les élections, coups et focus achevés que le moteur vient de décider.
 // Import-free à part les modules purs de la couche.
 
-import { normalizePolitics, POLITICS_TUNING } from "./politics.js";
+import { normalizePolitics, POLITICS_TUNING, POWER_PROGRAMMES_1936 } from "./politics.js";
 import { availableFocuses, focusTreeFor, normalizeFocusState } from "./focus.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -24,9 +24,17 @@ export const describePoliticsLine = (hoi, polity, { withFocusOptions = false } =
   const tree = focusTreeFor(name, state);
   const current = state.current ? tree.find((focus) => focus.id === state.current.id) : null;
   const options = withFocusOptions && !state.current ? availableFocuses(name, state, politics).slice(0, 6).map((focus) => `${focus.id} "${focus.name.en}"`) : [];
+  const programme = programmeOf(hoi, name);
   return `- ${name}: ${politics.ideology} government (${parties}); stability ${Math.round(politics.stability)}%, war support ${Math.round(politics.warSupport)}%${politics.elections?.next ? `; next election ${politics.elections.next}` : ""}`
     + `${current ? `; national focus "${current.name.en}" since ${state.current.startDate}` : "; no focus under way"}${state.completed.length ? `; ${state.completed.length} focus(es) done` : ""}`
-    + `${options.length ? `; can take: ${options.join(", ")}` : ""}.`;
+    + `${options.length ? `; can take: ${options.join(", ")}` : ""}.${programme ? `\n  Programme: ${programme}.` : ""}`;
+};
+
+// Phase 10 : le programme d'un pays — celui que la grande IA a fixé (economyOps
+// programme, gardé dans la mémoire de Jev), sinon celui de 1936 des puissances.
+export const programmeOf = (hoi, polity) => {
+  const memory = hoi?.jevMemory?.[nameIn(hoi?.jevMemory, polity)];
+  return clean(memory?.programme) || POWER_PROGRAMMES_1936[nameIn(POWER_PROGRAMMES_1936, polity)] || "";
 };
 
 // Le bloc complet. `polity` : le pays dont on parle d'abord ; `others` : combien
@@ -49,6 +57,7 @@ export const buildPoliticsPromptBlock = (world, polity, { others = 0, enginePoli
     for (const done of list(enginePolitics.completed)) lines.push(`- ${done.date} ${done.polity} completes the national focus "${done.name?.en ?? done.focusId}".`);
   }
   if (forTurn) {
+    lines.push("Each AI power pursues its Programme above: what it does this period serves it, or the event says why it departs from it (a shock, a new leader, a crisis). A power that changes course for good gets a new programme (economyOps programme).");
     lines.push(`Politics is engine-run: stability moves production (±20%), war support moves recruitment, and a country under ${POLITICS_TUNING.minWarSupportToDeclare}% war support cannot start a war of aggression (the engine drops it). Elections and coups happen by the engine's thresholds only: never narrate one it did not decide. An AI country may take a national focus (economyOps focus, focusId from the list above) or propose a custom one (label, days 14-140, effects such as "civil+2; stability+5; divisions:infanterie*2; claim:Gdańsk; opinion:Poland-20"), which the engine validates and bounds.`);
   }
   return lines.filter(Boolean).join("\n");

@@ -89,6 +89,21 @@ export const POLITICS_PRESETS_1936 = Object.freeze({
   Poland: { ideology: "authoritarian", parties: { authoritarian: 55, democratic: 30, fascist: 8, communist: 7 }, stability: 55, warSupport: 40 },
 });
 
+// Phase 10 : le programme de départ des puissances de 1936 — ce que chacune
+// cherche, et que la grande IA doit servir (bloc [POLITICS]) tant qu'aucun
+// economyOps « programme » ne l'a changé ; la fiche de Jev le reprend.
+export const POWER_PROGRAMMES_1936 = Object.freeze({
+  Germany: "Tear up Versailles step by step: rearm, remilitarise the Rhineland, bring Austria and the Sudeten Germans into the Reich, then Danzig; avoid a war on two fronts before 1939",
+  "Soviet Union": "Build socialism in one country: industrialise at any cost, purge enemies within, keep out of a capitalist war while it arms, and regain the lands lost in 1918-1921 when the moment comes",
+  France: "Keep Germany contained without fighting alone: hold the Maginot Line, keep Britain at her side and the eastern alliances alive, and ride out the social crisis at home",
+  "United Kingdom": "Preserve the Empire and the peace: rearm slowly, appease where it costs little, guard the sea lanes, and fight only with allies and when Britain is ready",
+  "United States": "Recover from the Depression and stay out of foreign wars; defend the Western Hemisphere and trade with all, unless attacked",
+  Italy: "Make a new Roman empire: hold Ethiopia, dominate the Mediterranean, take Albania, and lean toward whichever of Germany or the Allies pays more",
+  "Imperialist Japan": "Secure an empire in Asia: hold Manchukuo, press North China, and win the raw materials of the south, while the army and the navy argue over North or South",
+  "Kuomintang China": "Unify China under the Nationalist government: crush or tame the warlords and the communists, modernise the army, and resist Japan when strong enough",
+  Poland: "Stay independent between Germany and the Soviet Union: modernise the army, keep the French alliance, never let either neighbour through, and lead an Intermarium if possible",
+});
+
 // L'idéologie d'un pays sans préréglage, lue dans sa fiche (« government »).
 export const ideologyFromGovernment = (text) => {
   const t = clean(text).toLowerCase();

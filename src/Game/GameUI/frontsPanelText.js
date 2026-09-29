@@ -130,6 +130,7 @@ export const jevChoiceText = (choice, language = "en") => {
     [/^Escort our convoys off (.+?) with (\d+) fleets$/, (m) => `Escorter nos convois au large de ${place(m[1])} (${m[2]} flotte(s))`],
     [/^Land (\d+) divisions at (.+?), with the fleet in support$/, (m) => `Débarquer ${m[1]} divisions à ${place(m[2])}, avec l'appui de la flotte`],
     [/^Recruit nothing and keep the stockpile$/, () => "Ne rien recruter et garder la réserve"],
+    [/^Raise three (.+)s$/, (m) => `Lever trois ${m[1].replace(/^division/, "divisions").replace(/^escadre/, "escadres").replace(/^flotte/, "flottes")}`],
     [/^Raise one (.+)$/, (m) => `Lever une ${m[1]}`],
   ];
   for (const [pattern, write] of rules) {

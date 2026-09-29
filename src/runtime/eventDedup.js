@@ -63,6 +63,61 @@ export const dedupeGeneratedEvents = (baseEvents, generatedEvents, { keyOf = eve
   return fresh;
 };
 
+// Phase 10 — near-repeats. The model also restates an event in other words from
+// one turn to the next (« La France appelle à la modération » three turns in a
+// row). An event is a near-repeat when its title shares most of its words with a
+// recent one (Jaccard ≥ 0.6), or its title some and its description most (≥ 0.4
+// and ≥ 0.5). A near-repeat of a RECENT event (within `windowDays`) that changes
+// nothing (no impacts) is dropped; two near-twins in the same batch are merged
+// (the second's impacts join the first's). Engine events are never touched.
+const STOP_WORDS = new Set(["dans", "avec", "pour", "sans", "contre", "leurs", "leur", "entre", "apres", "avant", "sous", "that", "with", "from", "their", "this", "have", "into", "over", "after"]);
+export const wordsOf = (text) => new Set(norm(text).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  .split(/[^a-z0-9]+/).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
+export const jaccard = (a, b) => {
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared += 1;
+  return shared / (a.size + b.size - shared);
+};
+export const isNearRepeat = (a, b) => {
+  const title = jaccard(wordsOf(a?.title), wordsOf(b?.title));
+  if (title >= 0.6) return true;
+  return title >= 0.4 && jaccard(wordsOf(a?.description), wordsOf(b?.description)) >= 0.5;
+};
+const hasImpacts = (event) => Object.values(event?.impacts && typeof event.impacts === "object" ? event.impacts : {})
+  .some((value) => (Array.isArray(value) ? value.length > 0 : Boolean(value) && typeof value === "object" ? Object.keys(value).length > 0 : Boolean(value)));
+const dayOf = (date) => Math.floor(Date.parse(`${norm(date).slice(0, 10)}T00:00:00Z`) / 86400000);
+const mergeImpacts = (a = {}, b = {}) => {
+  const out = { ...a };
+  for (const [key, value] of Object.entries(b ?? {})) {
+    if (Array.isArray(value)) out[key] = [...(Array.isArray(out[key]) ? out[key] : []), ...value];
+    else if (out[key] === undefined) out[key] = value;
+  }
+  return out;
+};
+
+// Returns { kept, dropped: [{ event, like }], merged: [{ event, into }] }.
+export const screenRepeats = (priorEvents, generatedEvents, { windowDays = 60 } = {}) => {
+  const prior = (Array.isArray(priorEvents) ? priorEvents : []).filter((event) => norm(event?.source) !== "engine");
+  const kept = [];
+  const dropped = [];
+  const merged = [];
+  for (const event of Array.isArray(generatedEvents) ? generatedEvents : []) {
+    if (norm(event?.source) === "engine") { kept.push(event); continue; }
+    const twin = kept.find((other) => norm(other?.source) !== "engine" && isNearRepeat(other, event));
+    if (twin) {
+      twin.impacts = mergeImpacts(twin.impacts, event.impacts);
+      merged.push({ event, into: twin });
+      continue;
+    }
+    const day = dayOf(event?.date);
+    const like = !hasImpacts(event) && prior.find((other) => Number.isFinite(day) && day - dayOf(other?.date) <= windowDays && isNearRepeat(other, event));
+    if (like) { dropped.push({ event, like }); continue; }
+    kept.push(event);
+  }
+  return { kept, dropped, merged };
+};
+
 // Collapse exact duplicates within a single log (keeps the first occurrence). The
 // choke-point every write funnels through, so no writer can persist a repeating log.
 // `keyOf` says what "exact" means: the prose key (default), or eventCanonicalKey

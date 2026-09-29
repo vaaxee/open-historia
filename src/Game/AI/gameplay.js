@@ -248,7 +248,8 @@ import {
   writeGameData,
   writeWorldState,
 } from "../../runtime/gameState.js";
-import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import { dedupeGeneratedEvents, eventCanonicalKey, screenRepeats } from "../../runtime/eventDedup.js";
+import { closingDirective, mustResolve } from "../../runtime/interactiveLimit.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
@@ -7512,14 +7513,20 @@ const applySimulationResult = async ({
   // impacts, or land in this turn's record (also see the [New Developments Only]
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
-  const dedupedEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
-  if (dedupedEvents.length < generatedEvents.length) {
-    const fresh = new Set(dedupedEvents);
+  const exactDeduped = dedupeGeneratedEvents(priorEvents, generatedEvents);
+  if (exactDeduped.length < generatedEvents.length) {
+    const fresh = new Set(exactDeduped);
     for (const event of generatedEvents) {
       if (fresh.has(event)) continue;
       noteReceipt(receipt, "withheld", `"${normalizeString(event?.title)}" — word for word an event already on the record; restating history adds nothing.`);
     }
   }
+  // Phase 10 : les quasi-répétitions (eventDedup.js screenRepeats) — d'un tour à
+  // l'autre, écartées si elles ne changent rien ; dans le tour, fusionnées.
+  const repeats = screenRepeats(priorEvents, exactDeduped);
+  for (const { event, like } of repeats.dropped) noteReceipt(receipt, "withheld", `"${normalizeString(event?.title)}" — the same news as "${normalizeString(like?.title)}" (${normalizeString(like?.date)}), in other words and with no new effect; tell what CHANGED instead.`);
+  for (const { event, into } of repeats.merged) noteReceipt(receipt, "adjusted", `"${normalizeString(event?.title)}" merged into "${normalizeString(into?.title)}": the same news twice in one turn.`);
+  const dedupedEvents = repeats.kept;
 
   // The turn review's answers, when this is a time skip made while requests are
   // being saved (runTurnReview): the curator and the board below read their
@@ -12729,7 +12736,8 @@ export const advanceActiveInteractive = async (choiceText) => {
     .join("\n");
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
-    interactiveChoice: choiceText,
+    // Phase 10 : une scène a au plus INTERACTIVE_MAX_BEATS échanges (interactiveLimit.js).
+    interactiveChoice: `${choiceText}${closingDirective(interactive.history)}`,
     interactiveHistory: interactiveHistoryText,
     interactiveOpening: interactive.opening || "",
     interactivePremise: interactive.premise || interactive.title || "",
@@ -12757,7 +12765,8 @@ export const advanceActiveInteractive = async (choiceText) => {
     nextChoices: normalizeArray(payload?.nextChoices).map((entry) => normalizeString(entry)).filter(Boolean),
   });
 
-  if (!payload?.resolved) {
+  // Phase 10 : au dernier échange permis, la scène se conclut même si l'IA ne le dit pas.
+  if (!payload?.resolved && !mustResolve(interactive.history)) {
     const nextWorld = {
       ...world,
       activeInteractive: nextInteractive,

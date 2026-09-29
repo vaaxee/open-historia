@@ -27,6 +27,22 @@ import { frontLine, frontOptions, normalizeFronts } from "./fronts.js";
 import { normalizeAirMissions } from "./air.js";
 import { enemyDominates, normalizeNavalMissions } from "./naval.js";
 import { availableFocuses, normalizeFocusState } from "./focus.js";
+import { POWER_PROGRAMMES_1936 } from "./politics.js";
+import { divisionStrength } from "./armies.js";
+
+// Phase 10 : sous ce rapport de forces face à ses ennemis, un pays est prévenu
+// que son armée est trop faible, et le recrutement passe en tête.
+export const OUTNUMBERED_RATIO = 0.8;
+
+// La force terrestre d'un pays face à ses ennemis : { own, enemy, ratio }, en
+// « divisions pleines » (chaque division comptée selon son état).
+export const forceBalance = (owner, enemies, armies, templates) => {
+  const strength = (name) => (armies?.[name]?.divisions ?? []).reduce((sum, division) => (templates?.[division.template]?.kind === "land"
+    ? sum + divisionStrength(division, templates[division.template]).overall : sum), 0);
+  const own = strength(owner);
+  const enemy = (enemies ?? []).reduce((sum, name) => sum + strength(Object.keys(armies ?? {}).find((entry) => key(entry) === key(name)) ?? name), 0);
+  return { own: Math.round(own * 10) / 10, enemy: Math.round(enemy * 10) / 10, ratio: enemy > 0 ? Math.round((own / enemy) * 100) / 100 : Infinity };
+};
 
 export const LOCAL_DECIDER_TUNING = Object.freeze({
   maxDecisionsPerTurn: 20,
@@ -176,15 +192,24 @@ export const decisionQuestions = (polity, context) => {
   const affordable = Object.entries(templates).filter(([, spec]) => Object.entries(spec.equipment).every(([item, need]) => Number(stock[item] ?? 0) >= need)
     && Number(army?.manpower?.available ?? 0) >= spec.men).map(([template]) => template);
   if (affordable.length) {
+    // Phase 10 : test G avec Jev, il ne recrutait presque jamais. Le moteur lui
+    // dit quand son armée est trop faible face à ses ennemis : la question passe
+    // en tête, dit le rapport de forces, et propose d'abord de lever.
+    const balance = enemies.length ? forceBalance(owner, enemies, armies, templates) : null;
+    const outnumbered = Boolean(balance && balance.ratio < OUTNUMBERED_RATIO);
+    const raise = affordable.flatMap((template) => [
+      ...(outnumbered ? [{ text: `Raise three ${templates[template].label}s`, orders: [{ kind: "recruit", op: { op: "recruit", polity: owner, template, count: 3 } }] }] : []),
+      { text: `Raise one ${templates[template].label}`, orders: [{ kind: "recruit", op: { op: "recruit", polity: owner, template, count: 1 } }] },
+    ]);
+    const keep = { text: "Recruit nothing and keep the stockpile", orders: [] };
     questions.push({
       id: "recruit",
       kind: "recruit",
-      importance: enemies.length ? 2 : 1,
-      question: `${owner} can raise new units from its stockpile. What should it recruit this turn?`,
-      options: [
-        { text: "Recruit nothing and keep the stockpile", orders: [] },
-        ...affordable.map((template) => ({ text: `Raise one ${templates[template].label}`, orders: [{ kind: "recruit", op: { op: "recruit", polity: owner, template, count: 1 } }] })),
-      ].slice(0, LOCAL_DECIDER_TUNING.maxOptions),
+      importance: outnumbered ? 3 : enemies.length ? 2 : 1,
+      question: outnumbered
+        ? `${owner}'s army is too weak: ${balance.own} full divisions against ${balance.enemy} for its enemies (${balance.ratio} to 1). Unless it recruits, it will keep losing ground. What should it raise from its stockpile this turn?`
+        : `${owner} can raise new units from its stockpile. What should it recruit this turn?`,
+      options: (outnumbered ? [...raise.slice(0, LOCAL_DECIDER_TUNING.maxOptions - 1), keep] : [keep, ...raise]).slice(0, LOCAL_DECIDER_TUNING.maxOptions),
     });
   }
   return questions;
@@ -195,7 +220,8 @@ export const decisionQuestions = (polity, context) => {
 export const decisionSheet = (polity, { memory = {}, allies = [], grudges = [], date = "", army = null, fronts = [], templates = templatesFor("1936") } = {}) => {
   const head = [
     `You are ${polity}.`,
-    `Programme: ${clean(memory.programme) || "defend the country and its interests"}.`,
+    // Phase 10 : celui que la grande IA a fixé, sinon celui de 1936 des puissances.
+    `Programme: ${clean(memory.programme) || POWER_PROGRAMMES_1936[polity] || "defend the country and its interests"}.`,
     // Phase 8 : ce que son régime et ses focus disent de lui (focus.js programmeFor).
     ...(clean(memory.policy) ? [`Policy: ${clean(memory.policy)}.`] : []),
     `Allies: ${allies.length ? allies.join(", ") : "none"}.`,
