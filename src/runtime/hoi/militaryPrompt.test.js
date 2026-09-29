@@ -58,7 +58,7 @@ test("wired: the turn, the advisor and the leaders get the block; the engine's b
   assert.ok(combat > 0 && variables > combat, "resolved first, then handed to the prompt");
   assert.match(gameplay, /if \(segmentIndex === 0\) addEngineBattles\(candidate, context\.engineCombat, \{ world: bundle\.world, receipt: draft \}\);/);
   assert.match(gameplay, /engineCombat: context\.engineCombat \?\? null,/);
-  assert.match(gameplay, /armies: combat \? applyCombatOutcome\(impactedWorld\.hoi\.armies, combat\.outcome\) : impactedWorld\.hoi\.armies,/);
+  assert.match(gameplay, /const armies = releaseLandingDivisions\(combat \? applyCombatOutcome\(impactedWorld\.hoi\.armies, combat\.outcome\) : impactedWorld\.hoi\.armies\);/);
   assert.match(gameplay, /const military = normalizeString\(variables\.militarySummary\);\r?\n\s+if \(military\) systemPrompt = `\$\{systemPrompt\}\\n\\n\$\{military\}`;/);
   assert.match(gameplay, /warRule: `the front between \$\{attacker\} and \$\{defender\} is fought by the engine: only its battles take states`/);
   assert.match(read("Game", "AI", "promptContext.js"), /result\.militarySummary = buildMilitaryPromptBlock\(bundle\.world, normalizeString\(bundle\.game\?\.country\), \{/);

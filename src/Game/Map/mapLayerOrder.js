@@ -77,6 +77,9 @@ export const MAP_LAYER_ORDER = [
   "worldmap-battles",
   "worldmap-armies",
   "worldmap-armies-count",
+  // Phase 7.8 : escadres et flottes en mission.
+  "worldmap-air",
+  "worldmap-naval",
 
   // Unit counters are interactive operational objects and remain topmost.
   "units-fill",

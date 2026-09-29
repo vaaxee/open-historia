@@ -6,10 +6,12 @@ import { getStoredLanguage } from "../../runtime/i18n.js";
 import { battleSheetRows, battleSheetTitle, findBattle } from "./battleSheet.js";
 
 const selectBattleLog = (world) => world?.hoi?.battleLog ?? null;
+const selectNavalLog = (world) => world?.hoi?.navalLog ?? null;
 
 const BattleSheet = ({ battleId }) => {
     const log = useRuntimeState("world", selectBattleLog);
-    const battle = findBattle(log, battleId);
+    const navalLog = useRuntimeState("world", selectNavalLog);
+    const battle = findBattle(log, battleId, navalLog);
     const [open, setOpen] = React.useState(false);
     if (!battle) return null;
     const language = getStoredLanguage();

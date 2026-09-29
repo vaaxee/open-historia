@@ -10,6 +10,8 @@
 import { divisionStrength, normalizeArmy, templatesFor } from "./armies.js";
 import { describeBattles } from "./combat.js";
 import { normalizeFronts } from "./fronts.js";
+import { normalizeAirMissions } from "./air.js";
+import { describeNaval, normalizeLandings, normalizeNavalMissions } from "./naval.js";
 
 const clean = (value) => String(value ?? "").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -50,10 +52,29 @@ export const describeFronts = (hoi, { polity = "", nameOf = (id) => id } = {}) =
   .map((front) => `- ${front.owner} against ${front.enemy}: ${front.posture}${front.axis ? `, axis ${front.axisName || nameOf(front.axis)}` : ""}, ${front.divisionIds.length} division(s)${front.sector.length ? `, drawn over ${front.sector.length} state(s)` : ""}.`)
   .join("\n");
 
+// Phase 7.8 : les missions aériennes et navales (d'un pays, ou toutes), les
+// blocus du dernier tour.
+export const describeAirNaval = (hoi, { polity = "" } = {}) => {
+  const mine = (owner) => !polity || key(owner) === key(polity);
+  const fronts = new Map(normalizeFronts(hoi?.fronts).map((front) => [front.id, front]));
+  const air = normalizeAirMissions(hoi?.airMissions).filter((mission) => mine(mission.owner)).map((mission) => {
+    const front = fronts.get(mission.zone.frontId);
+    const where = mission.zone.kind === "front" ? (front ? `the front against ${front.owner === mission.owner ? front.enemy : front.owner}` : "a front") : `state ${mission.zone.stateId}`;
+    return `- ${mission.owner}: ${mission.wingIds.length} wing(s) on ${mission.mission} over ${where}.`;
+  });
+  const sea = normalizeNavalMissions(hoi?.navalMissions).filter((mission) => mine(mission.owner))
+    .map((mission) => `- ${mission.owner}: ${mission.fleetIds.length} fleet(s) on ${mission.mission} in sea zone ${mission.zoneId}.`);
+  const landings = normalizeLandings(hoi?.landings).filter((landing) => mine(landing.owner) || key(landing.enemy) === key(polity))
+    .map((landing) => `- ${landing.owner}: ${landing.divisionIds.length} division(s) embarked to land on ${landing.stateName}.`);
+  const blockades = list(hoi?.blockades).map((blockade) => `- ${blockade.owner} blockades sea zone ${blockade.zoneId}: ${list(blockade.states).length} enemy coastal state(s) cut from sea supply.`);
+  return [...air, ...sea, ...landings, ...blockades].join("\n");
+};
+
 // Le bloc complet. `polity` : le pays dont on parle d'abord (le joueur, ou le
 // dirigeant qui répond). `others` : combien d'autres armées lister (les pays en
 // guerre d'abord). `battles` : les batailles que le moteur vient de décider (tour).
-export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = null, nameOf = (id) => id, forTurn = false } = {}) => {
+// `naval` : les combats navals et blocus de ce tour ({ battles, blockades }).
+export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = null, naval = null, nameOf = (id) => id, forTurn = false } = {}) => {
   const hoi = world?.hoi;
   if (!hoi?.armies) return "";
   const lines = ["[ARMIES — computed by the engine]"];
@@ -70,6 +91,8 @@ export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = 
   }
   const fronts = describeFronts(hoi, { polity: others > 0 ? "" : polity, nameOf });
   lines.push(fronts ? `Fronts:\n${fronts}` : "Fronts: none.");
+  const airNaval = describeAirNaval(hoi, { polity: others > 0 ? "" : polity });
+  if (airNaval) lines.push(`Air and sea:\n${airNaval}`);
   const last = list(hoi.lastBattles).filter((battle) => others > 0 || key(battle.attacker) === key(polity) || key(battle.defender) === key(polity)).slice(-8);
   if (last.length) lines.push(`Battles of the last turn:\n${describeBattles(last)}`);
   if (forTurn && list(battles).length) {
@@ -79,8 +102,11 @@ export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = 
       describeBattles(battles),
     );
   }
+  if (forTurn && (list(naval?.battles).length || list(naval?.blockades).length)) {
+    lines.push("Naval battles and blockades of THIS period, decided by the engine (their events are written by the engine):", describeNaval(naval));
+  }
   if (forTurn) {
-    lines.push("An AI country fights through its fronts: economyOps front (polity, enemy at war, posture hold/attack/breakthrough, count of divisions to send) and recruits from its stockpile with economyOps recruit (template, count). The engine resolves every battle.");
+    lines.push("An AI country fights through its fronts: economyOps front (polity, enemy at war, posture hold/attack/breakthrough, count of divisions to send) and recruits from its stockpile with economyOps recruit (template, count). economyOps air (enemy, mission superiority/support, count of wings) and naval (enemy, mission escort/blockade/support/landing, count) send its aviation and fleets; the engine picks the front or sea zone. The engine resolves every battle.");
   }
   return lines.filter(Boolean).join("\n");
 };

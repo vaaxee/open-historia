@@ -5,6 +5,8 @@
 
 import { divisionStrength, normalizeArmy, templatesFor } from "../../runtime/hoi/armies.js";
 import { normalizeFronts } from "../../runtime/hoi/fronts.js";
+import { normalizeAirMissions } from "../../runtime/hoi/air.js";
+import { normalizeNavalMissions } from "../../runtime/hoi/naval.js";
 
 const clean = (value) => String(value ?? "").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -37,7 +39,34 @@ export const militaryStats = (world, polity) => {
   const report = nationKey ? hoi.lastReport?.nations?.[nationKey] : null;
   const battles = list(hoi.battleLog).filter((battle) => key(battle.attacker) === key(name) || key(battle.defender) === key(name));
   const lost = battles.reduce((sum, battle) => sum + (key(battle.attacker) === key(name) ? battle.losses?.attacker ?? 0 : battle.losses?.defender ?? 0), 0);
+  // Phase 7.8 : l'aviation et la marine.
+  const airMissions = normalizeAirMissions(hoi.airMissions).filter((mission) => key(mission.owner) === key(name));
+  const navalMissions = normalizeNavalMissions(hoi.navalMissions).filter((mission) => key(mission.owner) === key(name));
+  const wings = army.divisions.filter((division) => templates[division.template]?.kind === "air").length;
+  const fleets = army.divisions.filter((division) => templates[division.template]?.kind === "sea").length;
+  const inSide = (owners) => list(owners).some((owner) => key(owner) === key(name));
+  const navalBattles = list(hoi.navalLog).filter((battle) => inSide(battle.sides?.a) || inSide(battle.sides?.b));
+  const sunk = navalBattles.reduce((sum, battle) => sum + (inSide(battle.sides?.a) ? battle.sunk?.attacker ?? 0 : battle.sunk?.defender ?? 0), 0);
+  const zonesHeld = Object.values(hoi.seaControl ?? {}).filter((zone) => !zone?.contested && inSide(zone?.owners)).length;
+  const air = {
+    wings,
+    onMission: airMissions.reduce((sum, mission) => sum + mission.wingIds.length, 0),
+    superiority: airMissions.filter((mission) => mission.mission === "superiority").reduce((sum, mission) => sum + mission.wingIds.length, 0),
+    support: airMissions.filter((mission) => mission.mission === "support").reduce((sum, mission) => sum + mission.wingIds.length, 0),
+    lostLastTurn: hoi.lastAircraftLosses?.[name] ?? {},
+  };
+  const navy = {
+    fleets,
+    onMission: navalMissions.reduce((sum, mission) => sum + mission.fleetIds.length, 0),
+    missions: navalMissions.map((mission) => ({ zoneId: mission.zoneId, mission: mission.mission, count: mission.fleetIds.length })),
+    zonesHeld,
+    blockading: list(hoi.blockades).filter((blockade) => key(blockade.owner) === key(name)).reduce((sum, blockade) => sum + list(blockade.states).length, 0),
+    shipsLost: round2(sunk),
+    battles: navalBattles.slice(-5).reverse(),
+  };
   return {
+    air,
+    navy,
     polity: name,
     divisions,
     totalDivisions: army.divisions.length,

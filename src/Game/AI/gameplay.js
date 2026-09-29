@@ -126,9 +126,11 @@ import { isWorldMapGame } from "../../runtime/worldmap/gameMode.js";
 import { fixCapitalMisnaming, loadWorldMapCapitals } from "../../runtime/worldmap/capitals.js";
 import { buildSupplyFor } from "../../runtime/worldmap/supplyMap.js";
 import { buildWarMap } from "../../runtime/worldmap/warMap.js";
-import { applyCombatOutcome, battleEvent, resolveCombat } from "../../runtime/hoi/combat.js";
+import { applyCombatOutcome, battleEvent, mergeOutcomes, resolveCombat } from "../../runtime/hoi/combat.js";
+import { enemyDominates, landingSupport, navalBattleEvent, resolveNaval } from "../../runtime/hoi/naval.js";
 import { applyFrontsForTurn } from "../../runtime/worldmap/frontsTurn.js";
-import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
+import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
+import { loadWorldMapSeas, loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
 import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -6050,6 +6052,21 @@ const armyMapContext = async (world) => {
   return { catalog, info, capitals };
 };
 
+// Phase 7.8 : une division embarquée (frontId « landing-… ») redevient libre.
+const releaseLandingDivisions = (armies) => Object.fromEntries(Object.entries(armies ?? {}).map(([owner, army]) => [owner, {
+  ...army,
+  divisions: normalizeArray(army?.divisions).map((division) => (String(division?.frontId ?? "").startsWith("landing-") ? { ...division, frontId: "" } : division)),
+}]));
+
+// Phase 7.8 : les zones de mer de la carte, ou null (pas de marine sans elles).
+const seasForTurn = async () => {
+  try {
+    return await loadWorldMapSeas();
+  } catch {
+    return null;
+  }
+};
+
 const supplyForTurn = async (world) => {
   try {
     const context = await armyMapContext(world);
@@ -6073,16 +6090,19 @@ const supplyForTurn = async (world) => {
 const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) => {
   try {
     const start = bundle?.world;
-    if (!normalizeArray(start?.hoi?.fronts).length) return null;
+    if (!normalizeArray(start?.hoi?.fronts).length && !normalizeArray(start?.hoi?.navalMissions).length && !normalizeArray(start?.hoi?.landings).length) return null;
     const context = await armyMapContext(start);
     if (!context) return null;
+    const seas = await seasForTurn();
     // La défense par défaut d'abord (frontsTurn.js) : un pays attaqué tient sa
     // frontière dès la première bataille (test G : 33 divisions polonaises à
     // Varsovie, Rivne défendue par sa seule garnison). La même mise en place se
-    // refait, à l'identique, quand le tour s'applique.
+    // refait, à l'identique, quand le tour s'applique ; de même pour les escadres
+    // et les flottes des pays IA (7.8).
     const map = buildWarMap({ world: start, ...context });
-    const world = applyFrontsForTurn(start, { map, player: toCountryName(normalizeString(bundle.game?.country)) }).world;
+    const world = applyFrontsForTurn(start, { map, seas, player: toCountryName(normalizeString(bundle.game?.country)) }).world;
     const wars = warsFor(world);
+    const seed = `${normalizeString(bundle.game?.startDate)}|${normalizeString(bundle.game?.country)}`;
     // Les forts de la carte, par état (le plus fort l'emporte).
     const forts = new Map();
     const fortMarkers = normalizeArray(world.markers).filter((marker) => marker?.building?.type === "fort");
@@ -6094,18 +6114,37 @@ const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) 
       }
     }
     const date = addIsoDays(originDate, Math.max(1, Math.min(3, Math.round(days / 2)))) || originDate;
+    const warOf = (a, b) => atWar(wars, a, b);
+    // La mer d'abord (naval.js) : combats navals, maîtrise des zones, blocus ; un
+    // débarquement se livre ensuite, avec l'appui naval du moment.
+    const naval = seas
+      ? resolveNaval({ world, seas, atWar: warOf, controllerOf: map.controllerOf, nameOf: map.nameOf, date, days, seed })
+      : { control: {}, battles: [], outcome: {}, blockades: [] };
     const combat = resolveCombat({
       world,
       map,
-      atWar: (a, b) => atWar(wars, a, b),
+      atWar: warOf,
       sideOf: (polity) => [...coBelligerents(wars, polity)],
       date,
       days,
-      seed: `${normalizeString(bundle.game?.startDate)}|${normalizeString(bundle.game?.country)}`,
+      seed,
       fortAt: (id) => forts.get(id) ?? 0,
+      seaSupport: (zoneId, owner) => landingSupport(world, zoneId, owner, naval.control, warOf),
+      landingBlocked: (landing) => enemyDominates(naval.control, landing.zoneId, landing.owner, warOf),
     });
-    if (!combat.battles.length && !combat.surrenders.length) return null;
-    return { ...combat, date, names: Object.fromEntries(map.states.map((id) => [id, map.nameOf(id)])) };
+    if (!combat.battles.length && !combat.surrenders.length && !combat.intercepted.length && !naval.battles.length
+      && !naval.blockades.length && !Object.keys(combat.outcome).length && !Object.keys(naval.control).length) return null;
+    return {
+      ...combat,
+      // Pertes des flottes, puis celles du combat terrestre et aérien.
+      outcome: mergeOutcomes(naval.outcome, combat.outcome),
+      naval: { battles: naval.battles, control: naval.control, blockades: naval.blockades },
+      // Les missions et débarquements du tour (défauts des IA compris), pour l'application.
+      airMissions: normalizeArray(world.hoi.airMissions),
+      navalMissions: normalizeArray(world.hoi.navalMissions),
+      date,
+      names: Object.fromEntries(map.states.map((id) => [id, map.nameOf(id)])),
+    };
   } catch (error) {
     console.warn("[combat] the battles could not be resolved this turn.", error);
     return null;
@@ -6124,6 +6163,20 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
   const warIdFor = (a, b) => wars.find((war) => war.status === "active"
     && ((war.sideA.some((n) => n === a) && war.sideB.some((n) => n === b)) || (war.sideA.some((n) => n === b) && war.sideB.some((n) => n === a))))?.id ?? "";
   const events = normalizeArray(combat.battles).map((battle) => ({ ...battleEvent(battle, { language, nameOf }), warId: warIdFor(battle.attacker, battle.defender) }));
+  // Phase 7.8 : les combats navals et les convois de débarquement interceptés.
+  for (const battle of normalizeArray(combat.naval?.battles)) {
+    events.push({ ...navalBattleEvent(battle, { language, nameOf }), warId: warIdFor(battle.attacker, battle.defender) });
+  }
+  for (const entry of normalizeArray(combat.intercepted)) {
+    events.push({
+      date: combat.date,
+      title: language === "fr" ? `Débarquement intercepté au large de ${placeNameFor(entry.stateName, "fr")}` : `Landing intercepted off ${entry.stateName}`,
+      description: language === "fr"
+        ? `La flotte de ${nameOf(entry.enemy)} tient désormais la mer : le convoi de ${nameOf(entry.owner)} (${entry.divisions} division(s)) doit rentrer au port, avec des pertes.`
+        : `${entry.enemy}'s fleet now holds the sea: ${entry.owner}'s convoy (${entry.divisions} division(s)) turns back to port, with losses.`,
+      kind: "military", importance: "normal", notable: false, source: "engine", impacts: {}, warId: warIdFor(entry.owner, entry.enemy),
+    });
+  }
   const pockets = {};
   for (const surrender of normalizeArray(combat.surrenders)) if (surrender.reason === "encircled") (pockets[surrender.owner] ??= []).push(surrender);
   for (const [owner, list] of Object.entries(pockets)) {
@@ -6144,7 +6197,7 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
     insertEventAt(candidate, { ...event, id }, dated < 0 ? candidate.events.length : dated, EVENT_INDEX_DECODERS);
     count += 1;
   }
-  if (count) noteReceipt(receipt, "adjusted", `The engine resolved ${combat.battles.length} battle(s) this period and added their events; the story narrates them and changes none of their results.`);
+  if (count) noteReceipt(receipt, "adjusted", `The engine resolved ${combat.battles.length} battle(s)${normalizeArray(combat.naval?.battles).length ? ` and ${combat.naval.battles.length} naval battle(s)` : ""} this period and added their events; the story narrates them and changes none of their results.`);
 };
 
 // Phase 7.3 : les fronts après les impacts du tour (runtime/worldmap/frontsTurn.js) :
@@ -6154,7 +6207,7 @@ const applyFrontsAfterTurn = async (world, events, { date = "", receipt = null, 
   try {
     const context = await armyMapContext(world);
     if (!context) return world;
-    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date, player });
+    const result = applyFrontsForTurn(world, { events, map: buildWarMap({ world, ...context }), date, player, seas: await seasForTurn() });
     for (const note of result.notes) noteReceipt(receipt, note.kind, note.text);
     return result.world;
   } catch (error) {
@@ -7460,15 +7513,26 @@ const applySimulationResult = async ({
   // sont passées par les événements de bataille et les règles de guerre.
   if (impactedWorld?.hoi?.armies) {
     const combat = result.engineCombat;
+    // Les débarquements préparés avant ce tour y ont été livrés (ou interceptés) :
+    // ils s'effacent, et leurs divisions redeviennent libres quoi qu'il arrive.
+    const armies = releaseLandingDivisions(combat ? applyCombatOutcome(impactedWorld.hoi.armies, combat.outcome) : impactedWorld.hoi.armies);
     impactedWorld = {
       ...impactedWorld,
       hoi: {
         ...impactedWorld.hoi,
-        armies: combat ? applyCombatOutcome(impactedWorld.hoi.armies, combat.outcome) : impactedWorld.hoi.armies,
+        armies,
+        landings: [],
         lastBattles: normalizeArray(combat?.battles),
         lastSurrenders: normalizeArray(combat?.surrenders),
         // Les fiches des 60 dernières batailles, pour la carte d'un événement (7.6).
         battleLog: [...normalizeArray(impactedWorld.hoi.battleLog), ...normalizeArray(combat?.battles)].slice(-60),
+        // Phase 7.8 : la mer du tour (maîtrise des zones, blocus, combats navals)
+        // et les avions perdus.
+        seaControl: combat?.naval?.control ?? {},
+        blockades: normalizeArray(combat?.naval?.blockades),
+        lastNavalBattles: normalizeArray(combat?.naval?.battles),
+        navalLog: [...normalizeArray(impactedWorld.hoi.navalLog), ...normalizeArray(combat?.naval?.battles)].slice(-40),
+        lastAircraftLosses: combat?.aircraft ?? {},
       },
     };
   }

@@ -15,10 +15,13 @@ const line = (coordinates, properties) => ({ type: "Feature", properties, geomet
 
 // Les pions : une entité par (état, pays), avec le nombre de divisions et leur
 // force moyenne ; plusieurs pays dans un même état sont décalés côte à côte.
-export const armyStackFeatures = (armies, centers, { strengthOf = () => 1, colourOf = () => "#888" } = {}) => {
+// `counts(division)` : ce qui entre dans les pions (les divisions terrestres ;
+// escadres et flottes ont leurs propres compteurs, 7.8).
+export const armyStackFeatures = (armies, centers, { strengthOf = () => 1, colourOf = () => "#888", counts = () => true } = {}) => {
   const stacks = new Map();
   for (const [owner, army] of Object.entries(armies ?? {})) {
     for (const division of list(army?.divisions)) {
+      if (!counts(division)) continue;
       const stateId = clean(division.stateId);
       if (!stateId || !centers?.[stateId]) continue;
       const id = `${stateId}|${owner}`;
@@ -83,6 +86,61 @@ export const frontFeatures = (fronts, { centers, ownerOf, neighboursOf, colourOf
         }
       }
     }
+  }
+  return { type: "FeatureCollection", features };
+};
+
+// Phase 7.8 — les escadres en mission : un compteur « ✈ n » au-dessus du front
+// (au milieu des états où se tiennent ses divisions) ou de l'état survolé.
+export const airFeatures = (airMissions, { centers, fronts = [], armies = {}, colourOf = () => "#888" } = {}) => {
+  const where = new Map();
+  for (const army of Object.values(armies ?? {})) for (const division of list(army?.divisions)) where.set(division.id, clean(division.stateId));
+  const frontCenter = (frontId) => {
+    const front = list(fronts).find((entry) => entry?.id === frontId);
+    const points = list(front?.divisionIds).map((id) => centers?.[where.get(id)]).filter(Boolean);
+    if (!points.length) return null;
+    return [points.reduce((sum, [x]) => sum + x, 0) / points.length, points.reduce((sum, [, y]) => sum + y, 0) / points.length];
+  };
+  const features = [];
+  for (const mission of list(airMissions)) {
+    const center = mission?.zone?.kind === "state" ? centers?.[mission.zone.stateId] : frontCenter(mission?.zone?.frontId);
+    if (!center || !list(mission.wingIds).length) continue;
+    features.push(point([round5(center[0]), round5(center[1] + 0.9)], {
+      owner: mission.owner,
+      mission: mission.mission,
+      count: list(mission.wingIds).length,
+      label: `✈ ${list(mission.wingIds).length}`,
+      colour: colourOf(mission.owner),
+    }));
+  }
+  return { type: "FeatureCollection", features };
+};
+
+// Phase 7.8 — les flottes en mission, au centre de leur zone de mer (« ⚓ n »,
+// « ⛔ » pour un blocus qui tient), plusieurs pays côte à côte.
+export const navalFeatures = (navalMissions, { zones = {}, blockades = [], colourOf = () => "#888" } = {}) => {
+  const holding = new Set(list(blockades).map((blockade) => `${blockade.owner}|${blockade.zoneId}`));
+  const byZone = new Map();
+  for (const mission of list(navalMissions)) {
+    if (!zones?.[mission?.zoneId]?.center || !list(mission.fleetIds).length) continue;
+    byZone.set(mission.zoneId, [...(byZone.get(mission.zoneId) ?? []), mission]);
+  }
+  const features = [];
+  for (const [zoneId, group] of byZone) {
+    const [lng, lat] = zones[zoneId].center;
+    group.forEach((mission, index) => {
+      const offset = (index - (group.length - 1) / 2) * 0.8;
+      const blockade = mission.mission === "blockade" && holding.has(`${mission.owner}|${zoneId}`);
+      features.push(point([round5(lng + offset), round5(lat)], {
+        zoneId,
+        owner: mission.owner,
+        mission: mission.mission,
+        count: list(mission.fleetIds).length,
+        blockade,
+        label: `${blockade ? "⛔" : "⚓"} ${list(mission.fleetIds).length}`,
+        colour: colourOf(mission.owner),
+      }));
+    });
   }
   return { type: "FeatureCollection", features };
 };

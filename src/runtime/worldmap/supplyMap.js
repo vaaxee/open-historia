@@ -9,6 +9,7 @@
 
 import { computeSupply, sourcesFor, truckShare } from "../hoi/supply.js";
 import { templatesFor } from "../hoi/armies.js";
+import { blockadedStates } from "../hoi/naval.js";
 import { coBelligerents, warsFor } from "./warRules.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -39,6 +40,10 @@ export const buildSupplyFor = ({ world = {}, catalog = [], info = {}, capitals =
     .filter((marker) => marker?.building?.type === type && clean(marker.ownerCode).toLowerCase() === clean(polity).toLowerCase())
     .map((marker) => clean(marker.regionId) || clean(stateAt(Number(marker.lng), Number(marker.lat))))
     .filter(Boolean);
+  // Phase 7.8 : un port ou une côte sous blocus ennemi (naval.js) ne ravitaille
+  // plus par mer.
+  const blockaded = blockadedStates(world);
+  const open = (id) => !blockaded.has(clean(id));
   const cache = new Map();
   return (polity) => {
     if (cache.has(polity)) return cache.get(polity);
@@ -48,10 +53,10 @@ export const buildSupplyFor = ({ world = {}, catalog = [], info = {}, capitals =
       controllerOf,
       capital,
       depots: buildingsOf("complexe_industriel", polity),
-      ports: buildingsOf("port", polity),
+      ports: buildingsOf("port", polity).filter(open),
       // Ses côtes, ravitaillées par mer : seulement là où le pays est souverain
       // (une côte occupée se ravitaille par la terre, depuis le front).
-      coasts: states.filter((id) => infoOf(id).coastal && clean(sovereignOf(id)).toLowerCase() === clean(polity).toLowerCase()),
+      coasts: states.filter((id) => infoOf(id).coastal && open(id) && clean(sovereignOf(id)).toLowerCase() === clean(polity).toLowerCase()),
     });
     const supply = computeSupply({
       side: coBelligerents(wars, polity),

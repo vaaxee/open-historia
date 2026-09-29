@@ -2012,6 +2012,7 @@ export const buildPromptContext = async (bundle, {
     result.militarySummary = buildMilitaryPromptBlock(bundle.world, normalizeString(bundle.game?.country), {
       others: 10,
       battles: bundle.engineCombat?.battles ?? null,
+      naval: bundle.engineCombat?.naval ?? null,
       forTurn: true,
     });
   }

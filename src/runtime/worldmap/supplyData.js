@@ -19,4 +19,23 @@ export const loadWorldMapSupply = async ({ force = false } = {}) => {
   }
 };
 
-export const resetWorldMapSupplyCache = () => { cached = null; };
+export const resetWorldMapSupplyCache = () => { cached = null; cachedSeas = null; };
+
+// Phase 7.8 : les zones de mer (/api/worldmap/seas) : { zones, stateSeas }, ou
+// null hors de la carte mondiale.
+let cachedSeas = null;
+
+export const loadWorldMapSeas = async ({ force = false } = {}) => {
+  if (cachedSeas && !force) return cachedSeas;
+  try {
+    const response = await fetch("/api/worldmap/seas");
+    if (!response.ok) return null;
+    const data = await response.json();
+    const zones = data?.zones && typeof data.zones === "object" ? data.zones : {};
+    if (!Object.keys(zones).length) return null;
+    cachedSeas = { zones, stateSeas: data?.stateSeas && typeof data.stateSeas === "object" ? data.stateSeas : {} };
+    return cachedSeas;
+  } catch {
+    return null;
+  }
+};

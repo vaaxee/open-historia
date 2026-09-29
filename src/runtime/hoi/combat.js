@@ -26,6 +26,7 @@
 // sur les armées du moment.
 
 import { divisionStrength, templatesFor } from "./armies.js";
+import { airLosses, frontAir } from "./air.js";
 import { frontLine, normalizeFronts } from "./fronts.js";
 import { placeNameFor } from "../worldmap/placeNames.js";
 
@@ -48,12 +49,13 @@ export const COMBAT_TUNING = Object.freeze({
   // Météo : hiver (déc.-fév.) au-delà de 45° de latitude, boue (mars-avril, oct.-nov.) au-delà de 40°.
   winterAttack: 0.8,
   mudAttack: 0.85,
-  // Aviation : chaque escadre de chasse de plus que l'adversaire (supériorité
-  // aérienne), chaque escadre de bombardement (appui au sol), plafonnées.
-  airPerWing: 0.03,
-  airCap: 0.15,
-  bomberPerWing: 0.02,
-  bomberCap: 0.1,
+  // L'aviation (supériorité, appui, usure du ravitaillement) : air.js (7.8).
+  // Un débarquement : l'attaque qui passe la mer (naval.js : landingAttack), et
+  // les pertes d'une tête de pont repoussée, multipliées.
+  landingAttack: 0.5,
+  landingRepelLosses: 2,
+  // Un convoi de débarquement intercepté (la mer passée à l'ennemi) : part perdue.
+  interceptedLoss: 0.1,
   dice: 0.15,
   // Rapport de forces à partir duquel l'état est pris, en dessous duquel l'attaque est repoussée.
   captureRatio: 1.3,
@@ -124,16 +126,15 @@ export const divisionPower = (division, templates, role = "attack", terrain = ""
   return round2(base * strength * organisation * morale * experience * supply);
 };
 
-const airWings = (army, templates, template) => list(army?.divisions).filter((division) => division.template === template
-  && templates?.[template]?.kind === "air" && divisionStrength(division, templates[template]).overall > 0.3).length;
-
 // Les batailles d'un saut. `context` :
-//   world    : { hoi: { armies, fronts, series } }
+//   world    : { hoi: { armies, fronts, series, airMissions, landings } }
 //   map      : { states, controllerOf, neighboursOf, riverBetween, infoOf, nameOf, latOf }
 //   atWar(a, b), sideOf(polity) → noms du camp (le pays et ses alliés en guerre)
 //   date, days, seed, fortAt(stateId) → niveau de fort
-// Renvoie { battles, captures, outcome, surrenders }.
-export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polity) => [polity], date = "", days = 7, seed = "", fortAt = () => 0 } = {}) => {
+//   seaSupport(zoneId, owner) → appui naval d'un débarquement (naval.js), 0 → 0,4
+//   landingBlocked(landing) → l'ennemi domine désormais la zone du débarquement
+// Renvoie { battles, captures, outcome, surrenders, intercepted }.
+export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polity) => [polity], date = "", days = 7, seed = "", fortAt = () => 0, seaSupport = () => 0, landingBlocked = () => false } = {}) => {
   const T = COMBAT_TUNING;
   const hoi = world?.hoi ?? {};
   const templates = templatesFor(hoi.series);
@@ -143,26 +144,21 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
   const battles = [];
   const captures = [];
   const surrenders = [];
+  const intercepted = [];
   const taken = new Set();
   const byId = new Map();
   for (const [owner, army] of Object.entries(armies)) for (const division of list(army?.divisions)) byId.set(division.id, { owner, division });
   const change = (id) => (outcome[id] ??= { loss: 0, organisation: 0, morale: 0, experience: 0, stateId: "", removed: false });
   const weeks = Math.max(1 / 7, num(days, 7) / 7);
   const allowance = Math.max(1, Math.ceil(T.capturesPerWeek * weeks));
+  // Une escadre ne perd ses avions qu'une fois par saut, au pire de ses combats.
+  const airLoss = (id, loss) => { const entry = change(id); entry.loss = Math.max(entry.loss, loss); };
 
-  for (const front of fronts) {
-    if (front.posture === "hold" || !atWar(front.owner, front.enemy)) continue;
-    const line = frontLine(front, map);
-    const attackers = front.divisionIds.map((id) => byId.get(id)).filter((entry) => entry && key(entry.owner) === key(front.owner)
-      && T.stats[entry.division.template] && !outcome[entry.division.id]?.removed);
-    if (!attackers.length || !line.enemy.length) continue;
-    const ordered = [...new Set([...(front.axis && line.enemy.includes(front.axis) ? [front.axis] : []), ...line.enemy])].filter((id) => !taken.has(id));
-    const targets = front.posture === "breakthrough" ? ordered.slice(0, 1) : ordered.slice(0, Math.min(allowance, attackers.length));
+  // Les batailles d'un front (ou d'un débarquement : `landing`, avec son appui naval).
+  const engage = (front, { landing = null } = {}) => {
+    const cap = landing ? 1 : allowance;
     const enemySide = new Set(sideOf(front.enemy).map(key));
-    const ownAir = { fighters: airWings(armies[front.owner], templates, "chasse"), bombers: airWings(armies[front.owner], templates, "bombardement") };
-    const enemyAir = { fighters: airWings(armies[front.enemy], templates, "chasse") };
-    const air = 1 + clamp((ownAir.fighters - enemyAir.fighters) * T.airPerWing, -T.airCap, T.airCap) + Math.min(T.bomberCap, ownAir.bombers * T.bomberPerWing);
-    let captured = 0;
+    const state = { captured: 0 };
     // Où se tient une division maintenant : après un repli de ce tour, là où elle s'est repliée.
     const defendersIn = (target) => [...byId.values()].filter(({ owner, division }) => (outcome[division.id]?.stateId || division.stateId) === target
       && enemySide.has(key(owner)) && T.stats[division.template] && !outcome[division.id]?.removed);
@@ -177,6 +173,11 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       const fort = Math.max(0, Math.round(num(fortAt(target))));
       const weather = weatherAt(date, map.latOf?.(target));
       const defenderHolds = fronts.some((other) => key(other.owner) === key(front.enemy) && key(other.enemy) === key(front.owner) && other.posture === "hold");
+      // Le ciel (air.js) : la supériorité aérienne au-dessus de ce front et de cet
+      // état, l'appui des bombardiers, et le ravitaillement ennemi qu'ils usent.
+      const air = frontAir({ front, stateId: target, armies, airMissions: hoi.airMissions, fronts, templates, sideOf });
+      for (const [id, loss] of Object.entries(airLosses(air, days).losses)) airLoss(id, loss);
+      const naval = landing ? round2(num(seaSupport(landing.zoneId, front.owner))) : 0;
 
       const attackBase = assigned.reduce((sum, { division }) => sum + divisionPower(division, templates, "attack", terrain), 0);
       const defenseBase = defenders.length
@@ -189,22 +190,28 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
         hold: defenderHolds ? T.holdDefense : 1,
         posture: front.posture === "breakthrough" ? T.breakthroughAttack : 1,
         weather: weather === "winter" ? T.winterAttack : weather === "mud" ? T.mudAttack : 1,
-        air: round2(air),
+        air: air.factor,
+        superiority: air.superiority,
+        ...(air.attrition > 0 ? { bombing: round2(1 - air.attrition) } : {}),
+        // Le débarquement : l'attaque qui passe la mer, relevée par l'appui naval.
+        ...(landing ? { landing: round2(T.landingAttack * (1 + naval)) } : {}),
         dice: round2(1 + T.dice * (2 * seededRandom(`${seed}|${date}|${front.id}|${target}`) - 1)),
         // Chaque bond d'une percée essouffle un peu l'attaque.
         ...(step > 0 ? { fatigue: round2(Math.max(0.5, 1 - T.chainFatigue * step)) } : {}),
       };
-      const attack = round2(attackBase * factors.posture * factors.weather * factors.air * factors.dice * (factors.fatigue ?? 1));
-      const defense = round2(defenseBase * factors.terrain * factors.river * factors.fort * factors.hold);
+      const attack = round2(attackBase * factors.posture * factors.weather * factors.air * factors.dice * (factors.fatigue ?? 1) * (factors.landing ?? 1));
+      const defense = round2(defenseBase * factors.terrain * factors.river * factors.fort * factors.hold * (factors.bombing ?? 1));
       const ratio = defense > 0 ? round2(attack / defense) : 99;
-      const canTake = captured < allowance;
-      const result = ratio >= T.captureRatio && canTake ? "captured" : ratio >= T.repelRatio ? "stalemate" : "repelled";
+      const canTake = state.captured < cap;
+      // Une tête de pont qui ne prend pas est rembarquée : pas de combat indécis.
+      const result = ratio >= T.captureRatio && canTake ? "captured" : ratio >= T.repelRatio && !landing ? "stalemate" : "repelled";
 
       // Les pertes suivent le rapport de forces : l'attaquant d'une résistance
       // écrasée ne perd presque rien (test G : 3 000 hommes contre une garnison
       // qui, elle, ne perdait personne), le défenseur écrasé perd l'essentiel.
       const base = T.lossPerWeek * weeks;
-      const attackerLoss = round2(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.05, 3) * (front.posture === "breakthrough" ? T.breakthroughLosses : 1), 0, 0.6));
+      const attackerLoss = round2(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.05, 3)
+        * (front.posture === "breakthrough" ? T.breakthroughLosses : 1) * (landing && result !== "captured" ? T.landingRepelLosses : 1), 0, 0.6));
       const defenderLoss = round2(clamp(base * clamp(ratio, 0.3, 6) * (result === "captured" ? 1.5 : 1), 0, 0.8));
       const menBefore = { attacker: 0, defender: 0 };
       for (const { division } of assigned) {
@@ -215,6 +222,8 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
         entry.morale += result === "captured" ? T.moraleWin : result === "repelled" ? -T.moraleLoss : 0;
         entry.experience += T.experiencePerBattle;
         if (result === "captured") entry.stateId = target;
+        // Débarquées ou rembarquées, les divisions redeviennent libres.
+        if (landing) entry.frontId = "";
       }
       // Les défenseurs d'un état pris se replient sur un voisin de leur camp qui
       // n'est pas pris ce tour-ci ; sans repli possible, ils se rendent.
@@ -235,7 +244,7 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       }
       if (result === "captured") {
         taken.add(target);
-        captured += 1;
+        state.captured += 1;
         captures.push({ stateId: target, stateName: map.nameOf?.(target) ?? target, from: map.controllerOf(target), to: front.owner, frontId: front.id });
       }
       const count = (entries) => {
@@ -270,9 +279,28 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
         retreatTo: retreat ? (map.nameOf?.(retreat) ?? retreat) : "",
         surrendered: result === "captured" && !retreat ? defenders.length : 0,
         garrisonTaken: result === "captured" && defenders.length === 0 ? T.garrisonMen : 0,
+        // Le ciel de la bataille : supériorité (0 → 1 pour l'attaquant), escadres.
+        air: {
+          superiority: air.superiority,
+          fighters: { attacker: air.own.fighterIds.length, defender: air.enemy.fighterIds.length },
+          bombers: air.own.bomberIds.length,
+        },
+        ...(landing ? { landing: true, zoneId: landing.zoneId, naval } : {}),
       });
       return result;
     };
+    return { fight, defendersIn, enemySide, state };
+  };
+
+  for (const front of fronts) {
+    if (front.posture === "hold" || !atWar(front.owner, front.enemy)) continue;
+    const line = frontLine(front, map);
+    const attackers = front.divisionIds.map((id) => byId.get(id)).filter((entry) => entry && key(entry.owner) === key(front.owner)
+      && T.stats[entry.division.template] && !outcome[entry.division.id]?.removed);
+    if (!attackers.length || !line.enemy.length) continue;
+    const ordered = [...new Set([...(front.axis && line.enemy.includes(front.axis) ? [front.axis] : []), ...line.enemy])].filter((id) => !taken.has(id));
+    const targets = front.posture === "breakthrough" ? ordered.slice(0, 1) : ordered.slice(0, Math.min(allowance, attackers.length));
+    const { fight, defendersIn, enemySide, state } = engage(front);
 
     if (front.posture === "breakthrough") {
       // La percée : l'axe d'abord, puis, tant qu'elle passe et que le plafond le
@@ -281,7 +309,7 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       let target = ordered[0];
       let origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
       let step = 0;
-      while (target && captured < allowance) {
+      while (target && state.captured < allowance) {
         if (fight(target, attackers, origins, step) !== "captured") break;
         step += 1;
         const last = target;
@@ -302,6 +330,34 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
     }
   }
 
+  // Les débarquements préparés au tour d'avant (naval.js) : la bataille de la tête
+  // de pont, sans fleuve, l'attaque réduite par la mer et relevée par l'appui naval.
+  for (const landing of list(hoi.landings)) {
+    const target = clean(landing?.stateId);
+    const enemy = clean(map.controllerOf(target));
+    const attackers = list(landing?.divisionIds).map((id) => byId.get(id)).filter((entry) => entry && key(entry.owner) === key(landing.owner)
+      && T.stats[entry.division.template] && !outcome[entry.division.id]?.removed);
+    if (!attackers.length) continue;
+    if (!enemy || !atWar(landing.owner, enemy) || taken.has(target)) {
+      // La côte n'est plus ennemie (ou déjà prise) : les divisions débarquent sans combat, ou restent.
+      for (const { division } of attackers) change(division.id).frontId = "";
+      continue;
+    }
+    if (landingBlocked(landing)) {
+      // L'ennemi a pris la mer entre-temps : le convoi est intercepté et rentre, avec des pertes.
+      for (const { division } of attackers) {
+        const entry = change(division.id);
+        entry.frontId = "";
+        entry.loss = round2(1 - (1 - entry.loss) * (1 - T.interceptedLoss));
+        entry.organisation -= T.organisationLoss.defender;
+      }
+      intercepted.push({ id: clean(landing.id), owner: landing.owner, enemy, stateId: target, stateName: map.nameOf?.(target) ?? target, zoneId: landing.zoneId, divisions: attackers.length });
+      continue;
+    }
+    const { fight } = engage({ id: clean(landing.id), owner: landing.owner, enemy, posture: "attack" }, { landing });
+    fight(target, attackers, []);
+  }
+
   // Les poches : une division encerclée depuis assez longtemps et sans organisation se rend.
   for (const { owner, division } of byId.values()) {
     if (outcome[division.id]?.removed) continue;
@@ -310,7 +366,37 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       surrenders.push({ id: division.id, owner, stateId: division.stateId, reason: "encircled" });
     }
   }
-  return { battles, captures, outcome, surrenders };
+  // Les avions perdus ce tour, par pays (Statistiques, fiche).
+  const aircraft = {};
+  for (const [id, entry] of Object.entries(outcome)) {
+    const found = byId.get(id);
+    if (!found || templates[found.division.template]?.kind !== "air" || !(entry.loss > 0)) continue;
+    const lost = (aircraft[found.owner] ??= {});
+    for (const [item, count] of Object.entries(found.division.equipment ?? {})) lost[item] = round2((lost[item] ?? 0) + num(count) * entry.loss);
+  }
+  return { battles, captures, outcome, surrenders, intercepted, aircraft };
+};
+
+// Deux résultats par division (la mer, puis la terre et l'air) en un seul.
+export const mergeOutcomes = (...outcomes) => {
+  const out = {};
+  for (const outcome of outcomes) {
+    for (const [id, entry] of Object.entries(outcome ?? {})) {
+      const prev = out[id];
+      if (!prev) { out[id] = { ...entry }; continue; }
+      out[id] = {
+        ...prev,
+        loss: round2(1 - (1 - num(prev.loss)) * (1 - num(entry.loss))),
+        organisation: num(prev.organisation) + num(entry.organisation),
+        morale: num(prev.morale) + num(entry.morale),
+        experience: num(prev.experience) + num(entry.experience),
+        stateId: entry.stateId || prev.stateId,
+        removed: Boolean(prev.removed || entry.removed),
+        ...(entry.frontId !== undefined ? { frontId: entry.frontId } : {}),
+      };
+    }
+  }
+  return out;
 };
 
 // Porte le résultat du combat sur les armées du moment (celles du tour, qui ont
@@ -334,6 +420,7 @@ export const applyCombatOutcome = (armies, outcome) => {
         morale: round2(clamp(num(division.morale, 70) + entry.morale, 0, 100)),
         experience: round2(clamp(num(division.experience) + entry.experience, 0, 1)),
         ...(entry.stateId ? { stateId: entry.stateId } : {}),
+        ...(entry.frontId !== undefined ? { frontId: entry.frontId } : {}),
       });
     }
     out[owner] = { ...army, divisions };
@@ -357,10 +444,16 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
   // Les lieux dans la langue du tour (test G : « Warsaw » dans un récit français).
   const place = placeNameFor(battle.stateName, fr ? "fr" : "en");
   const retreatTo = placeNameFor(battle.retreatTo, fr ? "fr" : "en");
-  const title = fr ? `Bataille de ${place} : ${words[battle.result]}` : `Battle of ${place}: ${words[battle.result]}`;
-  const sides = fr
-    ? `${attacker} attaque ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
-    : `${attacker} attacks ${place}, held by ${defender}${battle.garrison ? " (garrison only)" : ""}.`;
+  const title = battle.landing
+    ? (fr ? `Débarquement à ${place} : ${battle.result === "captured" ? "tête de pont tenue" : "rembarquement"}` : `Landing at ${place}: ${battle.result === "captured" ? "bridgehead held" : "thrown back into the sea"}`)
+    : fr ? `Bataille de ${place} : ${words[battle.result]}` : `Battle of ${place}: ${words[battle.result]}`;
+  const sides = battle.landing
+    ? (fr
+      ? `${attacker} débarque à ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
+      : `${attacker} lands at ${place}, held by ${defender}${battle.garrison ? " (garrison only)" : ""}.`)
+    : fr
+      ? `${attacker} attaque ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
+      : `${attacker} attacks ${place}, held by ${defender}${battle.garrison ? " (garrison only)" : ""}.`;
   const losses = fr
     ? `Pertes : ${battle.losses.attacker.toLocaleString("fr-FR")} hommes pour ${attacker}, ${battle.losses.defender.toLocaleString("fr-FR")} pour ${defender}.`
     : `Losses: ${battle.losses.attacker.toLocaleString("en-US")} men for ${attacker}, ${battle.losses.defender.toLocaleString("en-US")} for ${defender}.`;
@@ -399,7 +492,10 @@ export const describeBattles = (battles) => list(battles).map((battle) => {
     f.river > 1 ? `river ×${f.river}` : "",
     f.fort > 1 ? `forts ×${f.fort}` : "",
     battle.weather ? `${battle.weather} ×${f.weather}` : "",
-    f.air !== 1 ? `air ×${f.air}` : "",
+    // Un ciel vide des deux côtés (50 %, ×1) ne se dit pas.
+    f.superiority !== undefined && (f.air !== 1 || f.superiority !== 0.5) ? `air superiority ${Math.round(f.superiority * 100)}% ×${f.air}` : "",
+    f.bombing ? `bombed supply ×${f.bombing}` : "",
+    f.landing ? `landing ×${f.landing}` : "",
     `dice ×${f.dice}`,
   ].filter(Boolean).join(", ");
   return `- ${battle.date} ${battle.stateName}: ${battle.attacker} (${battle.posture}) against ${battle.defender}${battle.garrison ? " (garrison)" : ""} — power ${battle.power.attack} vs ${battle.power.defense} (${mods}) → ${battle.result.toUpperCase()}; losses ${battle.losses.attacker} / ${battle.losses.defender} men${battle.retreatTo ? `; defenders retreat to ${battle.retreatTo}` : ""}${battle.surrendered ? `; ${battle.surrendered} division(s) surrender` : ""}.`;

@@ -97,6 +97,21 @@ export const registerWorldMapRoutes = (app) => {
     } catch { /* un fichier illisible : pas de données de ravitaillement */ }
     res.json({ states });
   });
+  // Phase 7.8 : les zones de mer du scénario de la partie (centre, voisines,
+  // états côtiers), écrites par scripts/worldmap/seas.mjs. Vide sinon.
+  app.get("/api/worldmap/seas", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const file = activeGameWorldMapFile();
+    let zones = {}; let stateSeas = {};
+    try {
+      if (file) {
+        const scenarioId = path.basename(path.dirname(file));
+        const seas = path.join(WORLD_MAP_DIR, `seas-${scenarioId}.json`);
+        if (fs.existsSync(seas)) ({ zones = {}, stateSeas = {} } = JSON.parse(fs.readFileSync(seas, "utf8")) ?? {});
+      }
+    } catch { /* un fichier illisible : pas de zones de mer */ }
+    res.json({ zones, stateSeas });
+  });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...worldMapStatus(), game: Boolean(activeGameWorldMapFile()) });

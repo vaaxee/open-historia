@@ -9,6 +9,7 @@ const box = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,
 const heading = { color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", marginBottom: "0.4rem", textTransform: "uppercase" };
 const row = { display: "flex", fontSize: "0.78rem", gap: "0.6rem", justifyContent: "space-between", lineHeight: 1.55 };
 const num = (value) => Math.round(Number(value) || 0).toLocaleString();
+const NAVAL_MISSION_LABELS = { escort: "Convoy escort", blockade: "Blockade", support: "Landing support" };
 
 const MilitaryStats = ({ world, targetCountry }) => {
     const stats = militaryStats(world, targetCountry);
@@ -47,6 +48,33 @@ const MilitaryStats = ({ world, targetCountry }) => {
                 {produced.length === 0 && <div style={row}><span>No output recorded yet</span></div>}
                 {produced.map(([item, count]) => <div key={`p-${item}`} style={row}><span>{item}</span><span data-no-translate="">+{num(count)}</span></div>)}
                 {reserve.map(([item, count]) => <div key={`r-${item}`} style={{ ...row, color: "rgba(255,255,255,0.6)" }}><span>{item} in reserve</span><span data-no-translate="">{num(count)}</span></div>)}
+            </div>
+            <div style={box}>
+                <div style={heading}>Air force</div>
+                <div style={row}><span>Air wings</span><span data-no-translate="">{stats.air.wings}</span></div>
+                <div style={row}><span>On mission: air superiority / ground support</span><span data-no-translate="">{stats.air.superiority} / {stats.air.support}</span></div>
+                {Object.entries(stats.air.lostLastTurn).filter(([, count]) => count > 0).map(([item, count]) => (
+                    <div key={`air-${item}`} style={{ ...row, color: "#fca5a5" }}><span>Aircraft lost last turn</span><span data-no-translate="">{item} {num(count)}</span></div>
+                ))}
+            </div>
+            <div style={box}>
+                <div style={heading}>Navy</div>
+                <div style={row}><span>Fleets</span><span data-no-translate="">{stats.navy.fleets}</span></div>
+                {stats.navy.missions.map((mission) => (
+                    <div key={`sea-${mission.zoneId}-${mission.mission}`} style={row}>
+                        <span>{NAVAL_MISSION_LABELS[mission.mission] ?? mission.mission}</span>
+                        <span data-no-translate="">{mission.count} · {mission.zoneId}</span>
+                    </div>
+                ))}
+                <div style={row}><span>Sea zones held</span><span data-no-translate="">{stats.navy.zonesHeld}</span></div>
+                {stats.navy.blockading > 0 && <div style={row}><span>Enemy coastal states under blockade</span><span data-no-translate="">{stats.navy.blockading}</span></div>}
+                {stats.navy.shipsLost > 0 && <div style={{ ...row, color: "#fca5a5" }}><span>Ships lost in naval battles</span><span data-no-translate="">{stats.navy.shipsLost}</span></div>}
+                {stats.navy.battles.map((battle) => (
+                    <div key={battle.id} style={row}>
+                        <span data-no-translate="">{battle.date} · {battle.zoneId}{battle.zoneName ? ` · ${placeNameFor(battle.zoneName, language)}` : ""}</span>
+                        <span data-no-translate="">{words.navalResults[battle.result] ?? battle.result}</span>
+                    </div>
+                ))}
             </div>
             <div style={box}>
                 <div style={heading}>Fronts</div>

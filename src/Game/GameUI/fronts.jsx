@@ -6,10 +6,10 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
+import { loadWorldMapSeas, loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { useWorldMapState } from "../Map/worldMapStore.js";
 import { startFrontDraw, stopFrontDraw, useFrontDraw } from "../Map/frontDrawStore.js";
-import { applyPlayerFrontOp, frontsPanelModel, panelMap } from "./frontsModel.js";
+import { airPanelModel, applyPlayerAirOp, applyPlayerFrontOp, applyPlayerNavalOp, frontsPanelModel, navalPanelModel, panelMap } from "./frontsModel.js";
 import { HOI_WRITE_ERRORS, updateHoiWorld } from "./hoiWrites.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
 import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
@@ -21,6 +21,9 @@ const selectHasArmies = (world) => Boolean(world?.hoi?.armies);
 export const useArmiesActive = () => useRuntimeState("world", selectHasArmies);
 
 const POSTURES = [["hold", "Hold"], ["attack", "Attack"], ["breakthrough", "Break through"]];
+const TABS = [["land", "Land"], ["air", "Air"], ["sea", "Sea"]];
+const NAVAL_LABELS = { escort: "Convoy escort", blockade: "Blockade", support: "Landing support" };
+const templateName = (template) => ({ chasse: "fighters", bombardement: "bombers", flotte: "fleets" })[template] ?? template;
 const card = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", padding: "0.7rem 0.8rem" };
 const small = { color: "rgba(255,255,255,0.55)", fontSize: "0.7rem" };
 const button = (active = false) => ({
@@ -41,6 +44,12 @@ const FrontsPanel = ({ isOpen, onClose }) => {
   const [enemy, setEnemy] = useState("");
   const [drawingFor, setDrawingFor] = useState(null); // "new" or a front id
   const [assign, setAssign] = useState({});
+  // Phase 7.8 : Terre, Air, Mer.
+  const [tab, setTab] = useState("land");
+  const [seas, setSeas] = useState(null);
+  const [airForm, setAirForm] = useState({ template: "chasse", count: 1, zone: "" });
+  const [seaForm, setSeaForm] = useState({ zoneId: "", mission: "escort", count: 1 });
+  const [landForm, setLandForm] = useState({ stateId: "", count: 3 });
 
   useEffect(() => {
     if (!isOpen || info) return undefined;
@@ -48,6 +57,12 @@ const FrontsPanel = ({ isOpen, onClose }) => {
     loadWorldMapSupply().then((states) => { if (alive) setInfo(states); }).catch(() => {});
     return () => { alive = false; };
   }, [isOpen, info]);
+  useEffect(() => {
+    if (!isOpen || tab !== "sea" || seas) return undefined;
+    let alive = true;
+    loadWorldMapSeas().then((data) => { if (alive) setSeas(data ?? { zones: {}, stateSeas: {} }); }).catch(() => {});
+    return () => { alive = false; };
+  }, [isOpen, tab, seas]);
   useEffect(() => { if (!isOpen && draw.drawing) { stopFrontDraw(); setDrawingFor(null); } }, [isOpen, draw.drawing]);
 
   const map = useMemo(
@@ -55,6 +70,8 @@ const FrontsPanel = ({ isOpen, onClose }) => {
     [world, info, worldMap.stateOwners, worldMap.stateNames],
   );
   const model = useMemo(() => (world?.hoi?.armies ? frontsPanelModel(world, country, map) : null), [world, country, map]);
+  const air = useMemo(() => (tab === "air" && world?.hoi?.armies ? airPanelModel(world, country, map) : null), [tab, world, country, map]);
+  const sea = useMemo(() => (tab === "sea" && world?.hoi?.armies && seas ? navalPanelModel(world, country, map, seas) : null), [tab, world, country, map, seas]);
   // Les lieux et les pays dans la langue du joueur (test G : « axe imp-rgb-AA7700 »).
   const language = getStoredLanguage();
   const place = (name) => placeNameFor(name, language);
@@ -62,7 +79,8 @@ const FrontsPanel = ({ isOpen, onClose }) => {
   const openable = (model?.enemies ?? []).filter((entry) => !entry.hasFront);
   const chosenEnemy = openable.some((entry) => entry.name === enemy) ? enemy : openable[0]?.name ?? "";
 
-  const run = async (op) => {
+  // Un ordre, appliqué au monde du moment par `apply(current, op, map)`.
+  const order = async (op, apply = applyPlayerFrontOp) => {
     if (pending || !model) return;
     setPending(true);
     setMessage("");
@@ -70,8 +88,8 @@ const FrontsPanel = ({ isOpen, onClose }) => {
       let note = "";
       const result = await updateHoiWorld((current) => {
         const currentMap = info && worldMap.stateOwners ? panelMap(current, { info, stateOwners: worldMap.stateOwners, stateNames: worldMap.stateNames }) : null;
-        const applied = applyPlayerFrontOp(current, { polity: model.owner, ...op }, currentMap);
-        note = applied.note.text.replace(/^frontOps — /, "");
+        const applied = apply(current, { polity: model.owner, ...op }, currentMap);
+        note = applied.note.text.replace(/^(frontOps|airOps|navalOps) — /, "");
         return applied.note.kind === "dropped" ? { error: "refused" } : { world: applied.world };
       });
       setMessage(result.ok ? note : (result.error === "refused" ? note : HOI_WRITE_ERRORS[result.error] ?? result.error));
@@ -79,6 +97,9 @@ const FrontsPanel = ({ isOpen, onClose }) => {
       setPending(false);
     }
   };
+  const run = (op) => order(op);
+  const runAir = (op) => order(op, (current, full) => applyPlayerAirOp(current, full));
+  const runSea = (op) => order(op, (current, full, currentMap) => applyPlayerNavalOp(current, full, currentMap, seas));
   const beginDraw = (target, sector = []) => { setDrawingFor(target); startFrontDraw(sector); setMessage("Click your states along the border on the map, then save."); };
   const endDraw = () => { stopFrontDraw(); setDrawingFor(null); };
 
@@ -96,9 +117,133 @@ const FrontsPanel = ({ isOpen, onClose }) => {
       <div style={{ display: "grid", gap: "0.7rem", overflowY: "auto", padding: "0.8rem 1.1rem 1rem" }}>
         {!model && <p style={small}>This game has no armies tracked by the engine.</p>}
         {model && !map && <p style={small}>Loading the map…</p>}
+        {model && (
+          <div style={{ display: "flex", gap: "0.35rem" }} role="tablist">
+            {TABS.map(([value, label]) => (
+              <button key={value} type="button" role="tab" aria-selected={tab === value} style={button(tab === value)} onClick={() => { setTab(value); setMessage(""); }}>{label}</button>
+            ))}
+          </div>
+        )}
         {message && <div style={{ ...card, color: "#fde68a", fontSize: "0.74rem" }}>{message}</div>}
 
-        {model && map && (
+        {tab === "air" && model && !air && <p style={small}>Loading…</p>}
+        {tab === "air" && air && (() => {
+          const zone = airForm.zone || (air.fronts[0] ? `front:${air.fronts[0].id}` : "");
+          const [kind, id] = zone.split(/:(.*)/s);
+          const lost = Object.entries(air.losses).filter(([, count]) => count > 0);
+          return (
+            <>
+              <div style={card}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Air wings</div>
+                <div style={small}>
+                  <span>Free: </span>
+                  <span data-no-translate="">{Object.entries(air.free).map(([template, count]) => `${templateName(template)} ${count}`).join(", ") || "—"}</span>
+                </div>
+                {lost.length > 0 && (
+                  <div style={{ ...small, color: "#fca5a5" }}>
+                    <span>Aircraft lost last turn: </span><span data-no-translate="">{lost.map(([item, count]) => `${item} ${Math.round(count)}`).join(", ")}</span>
+                  </div>
+                )}
+                {air.fronts.length === 0 && air.states.length === 0 && <p style={small}>Open a front first: wings fly over a front or the states along it.</p>}
+                {(air.fronts.length > 0 || air.states.length > 0) && (
+                  <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+                    <input type="number" min={1} max={40} value={airForm.count} aria-label="Wings" style={{ ...select, width: "3.2rem" }}
+                      onChange={(event) => setAirForm((form) => ({ ...form, count: Number(event.target.value) || 1 }))} />
+                    <select value={airForm.template} style={select} aria-label="Wing type" onChange={(event) => setAirForm((form) => ({ ...form, template: event.target.value }))}>
+                      <option value="chasse">Fighters: air superiority</option>
+                      <option value="bombardement">Bombers: ground support</option>
+                    </select>
+                    <select value={zone} style={select} aria-label="Air zone" onChange={(event) => setAirForm((form) => ({ ...form, zone: event.target.value }))}>
+                      {air.fronts.map((front) => <option key={front.id} value={`front:${front.id}`} data-no-translate="">{`Front → ${polity(front.enemy)}`}</option>)}
+                      {air.states.map((state) => <option key={state.id} value={`state:${state.id}`} data-no-translate="">{place(state.name)}</option>)}
+                    </select>
+                    <button type="button" style={button()} disabled={pending || !zone}
+                      onClick={() => runAir({ op: "assign", ...(kind === "front" ? { frontId: id } : { stateId: id }), mission: airForm.template === "bombardement" ? "support" : "superiority", template: airForm.template, count: airForm.count })}>Send</button>
+                  </div>
+                )}
+              </div>
+              {air.missions.map((mission) => (
+                <div key={mission.id} style={{ ...card, alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: "0.75rem" }}>
+                    <span>{mission.mission === "support" ? "Ground support" : "Air superiority"}</span>
+                    <span data-no-translate="">{` · ${mission.wingIds.length} · ${mission.over.kind === "front" ? `Front → ${polity(mission.over.enemy)}` : place(mission.over.name)}`}</span>
+                  </span>
+                  <button type="button" style={button()} disabled={pending} onClick={() => runAir({ op: "recall", missionId: mission.id })}>Recall</button>
+                </div>
+              ))}
+            </>
+          );
+        })()}
+
+        {tab === "sea" && model && !sea && <p style={small}>{seas && !Object.keys(seas.zones ?? {}).length ? "This map has no sea zones." : "Loading…"}</p>}
+        {tab === "sea" && sea && (() => {
+          const zoneId = sea.zones.some((zone) => zone.zoneId === seaForm.zoneId) ? seaForm.zoneId : sea.zones[0]?.zoneId ?? "";
+          const coast = sea.coasts.some((entry) => entry.id === landForm.stateId) ? landForm.stateId : sea.coasts[0]?.id ?? "";
+          const controlText = (control) => (!control ? "" : control.contested ? " · contested" : ` · held by ${control.owners.map(polity).join(", ")}`);
+          return (
+            <>
+              <div style={card}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Fleets</div>
+                <div style={small}><span>Free fleets: </span><span data-no-translate="">{sea.freeFleets}</span></div>
+                {sea.zones.length === 0 && <p style={small}>No sea zone borders your coasts.</p>}
+                {sea.zones.length > 0 && (
+                  <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+                    <input type="number" min={1} max={40} value={seaForm.count} aria-label="Fleets" style={{ ...select, width: "3.2rem" }}
+                      onChange={(event) => setSeaForm((form) => ({ ...form, count: Number(event.target.value) || 1 }))} />
+                    <select value={seaForm.mission} style={select} aria-label="Naval mission" onChange={(event) => setSeaForm((form) => ({ ...form, mission: event.target.value }))}>
+                      <option value="escort">Convoy escort</option>
+                      <option value="blockade">Blockade</option>
+                      <option value="support">Landing support</option>
+                    </select>
+                    <select value={zoneId} style={{ ...select, maxWidth: "11rem" }} aria-label="Sea zone" onChange={(event) => setSeaForm((form) => ({ ...form, zoneId: event.target.value }))}>
+                      {sea.zones.map((zone) => <option key={zone.zoneId} value={zone.zoneId} data-no-translate="">{`${zone.zoneId} · ${place(zone.name)}${zone.enemy ? " ⚔" : ""}${controlText(zone.control)}`}</option>)}
+                    </select>
+                    <button type="button" style={button()} disabled={pending || !zoneId || !sea.freeFleets}
+                      onClick={() => runSea({ op: "assign", zoneId, mission: seaForm.mission, count: seaForm.count })}>Send</button>
+                  </div>
+                )}
+              </div>
+              {sea.missions.map((mission) => (
+                <div key={mission.id} style={{ ...card, alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: "0.75rem" }}>
+                    <span>{NAVAL_LABELS[mission.mission] ?? mission.mission}</span>
+                    <span data-no-translate="">{` · ${mission.fleetIds.length} · ${mission.zoneId} ${place(mission.name)}${controlText(mission.control)}`}</span>
+                  </span>
+                  <button type="button" style={button()} disabled={pending} onClick={() => runSea({ op: "recall", missionId: mission.id })}>Recall</button>
+                </div>
+              ))}
+              {sea.blockades.map((blockade) => (
+                <div key={`${blockade.owner}-${blockade.zoneId}`} style={{ ...card, color: blockade.against ? "#fca5a5" : "#86efac", fontSize: "0.74rem" }}>
+                  <span>{blockade.against ? "Blockade against you" : "Your blockade holds"}</span>
+                  <span data-no-translate="">{` · ${blockade.zoneId} ${place(blockade.name)} · ${blockade.states.length}`}</span>
+                </div>
+              ))}
+              <div style={card}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Landing</div>
+                <div style={small}><span>Free divisions on your coasts: </span><span data-no-translate="">{sea.onCoast}</span></div>
+                {sea.coasts.length === 0 && <p style={small}>No enemy coast to land on.</p>}
+                {sea.coasts.length > 0 && (
+                  <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+                    <input type="number" min={1} max={6} value={landForm.count} aria-label="Divisions to land" style={{ ...select, width: "3.2rem" }}
+                      onChange={(event) => setLandForm((form) => ({ ...form, count: Number(event.target.value) || 1 }))} />
+                    <select value={coast} style={{ ...select, maxWidth: "12rem" }} aria-label="Coast" onChange={(event) => setLandForm((form) => ({ ...form, stateId: event.target.value }))}>
+                      {sea.coasts.map((entry) => <option key={entry.id} value={entry.id} data-no-translate="">{`${place(entry.name)} (${polity(entry.owner)})`}</option>)}
+                    </select>
+                    <button type="button" style={button()} disabled={pending || !coast || !sea.onCoast}
+                      onClick={() => runSea({ op: "land", stateId: coast, count: landForm.count })}>Prepare</button>
+                  </div>
+                )}
+                {sea.landings.map((landing) => (
+                  <div key={landing.id} style={{ ...small, marginTop: "0.3rem" }}>
+                    <span>Embarked for next turn: </span><span data-no-translate="">{`${landing.divisionIds.length} → ${place(landing.stateName)}`}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          );
+        })()}
+
+        {model && map && tab === "land" && (
           <div style={card}>
             <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.4rem" }}>Open a front</div>
             {model.enemies.length === 0 && <p style={small}>You are at war with no one: declare a war first.</p>}
@@ -124,7 +269,7 @@ const FrontsPanel = ({ isOpen, onClose }) => {
           </div>
         )}
 
-        {model?.fronts.map((front) => {
+        {tab === "land" && model?.fronts.map((front) => {
           const pick = assign[front.id] ?? { template: Object.keys(model.free)[0] ?? "infanterie", count: 5 };
           return (
             <div key={front.id} style={card}>

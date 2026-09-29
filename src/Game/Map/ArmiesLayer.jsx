@@ -6,9 +6,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
+import { loadWorldMapSeas, loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { divisionStrength, templatesFor } from "../../runtime/hoi/armies.js";
-import { armyStackFeatures, battleFeatures, frontFeatures } from "./armyFeatures.js";
+import { airFeatures, armyStackFeatures, battleFeatures, frontFeatures, navalFeatures } from "./armyFeatures.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { useFrontDraw } from "./frontDrawStore.js";
 
@@ -17,6 +17,9 @@ const selectFronts = (world) => world?.hoi?.fronts ?? null;
 const selectBattles = (world) => world?.hoi?.lastBattles ?? null;
 const selectSeries = (world) => world?.hoi?.series ?? "1936";
 const selectOverrides = (world) => world?.regionOwnershipOverrides ?? null;
+const selectAirMissions = (world) => world?.hoi?.airMissions ?? null;
+const selectNavalMissions = (world) => world?.hoi?.navalMissions ?? null;
+const selectBlockades = (world) => world?.hoi?.blockades ?? null;
 const EMPTY = Object.freeze({ type: "FeatureCollection", features: [] });
 const FONT = ["Open Sans Semibold", "Arial Unicode MS Bold"];
 
@@ -28,7 +31,11 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
   const battles = useRuntimeState("world", selectBattles);
   const series = useRuntimeState("world", selectSeries);
   const overrides = useRuntimeState("world", selectOverrides);
+  const airMissions = useRuntimeState("world", selectAirMissions);
+  const navalMissions = useRuntimeState("world", selectNavalMissions);
+  const blockades = useRuntimeState("world", selectBlockades);
   const [supply, setSupply] = useState(null);
+  const [seas, setSeas] = useState(null);
 
   useEffect(() => {
     if (!armies || supply) return undefined;
@@ -36,6 +43,12 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
     loadWorldMapSupply().then((states) => { if (alive && Object.keys(states).length) setSupply(states); }).catch(() => {});
     return () => { alive = false; };
   }, [armies, supply]);
+  useEffect(() => {
+    if (!navalMissions?.length || seas) return undefined;
+    let alive = true;
+    loadWorldMapSeas().then((data) => { if (alive && data) setSeas(data); }).catch(() => {});
+    return () => { alive = false; };
+  }, [navalMissions, seas]);
 
   const centers = useMemo(() => {
     if (!supply) return null;
@@ -47,8 +60,19 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
   const templates = templatesFor(series);
 
   const stacks = useMemo(() => (armies && centers
-    ? armyStackFeatures(armies, centers, { colourOf, strengthOf: (division) => divisionStrength(division, templates[division.template]).overall })
+    ? armyStackFeatures(armies, centers, {
+      colourOf,
+      strengthOf: (division) => divisionStrength(division, templates[division.template]).overall,
+      counts: (division) => templates[division.template]?.kind === "land",
+    })
     : EMPTY), [armies, centers, colourOf, templates]);
+  // Phase 7.8 : escadres au-dessus de leur front, flottes dans leur zone de mer.
+  const airMarks = useMemo(() => (airMissions?.length && centers
+    ? airFeatures(airMissions, { centers, fronts, armies, colourOf })
+    : EMPTY), [airMissions, centers, fronts, armies, colourOf]);
+  const navalMarks = useMemo(() => (navalMissions?.length && seas?.zones
+    ? navalFeatures(navalMissions, { zones: seas.zones, blockades, colourOf })
+    : EMPTY), [navalMissions, seas, blockades, colourOf]);
   const frontLines = useMemo(() => (fronts?.length && centers
     ? frontFeatures(fronts, { centers, ownerOf, neighboursOf: (id) => supply?.[id]?.neighbours ?? [], colourOf })
     : EMPTY), [fronts, centers, ownerOf, supply, colourOf]);
@@ -60,7 +84,7 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
     features: draw.sector.filter((id) => centers[id]).map((id) => ({ type: "Feature", properties: { stateId: id }, geometry: { type: "Point", coordinates: centers[id] } })),
   } : EMPTY), [draw, centers]);
 
-  useEffect(() => { if (map) enforceMapLayerOrder(map); }, [map, stacks, frontLines, battleMarks]);
+  useEffect(() => { if (map) enforceMapLayerOrder(map); }, [map, stacks, frontLines, battleMarks, airMarks, navalMarks]);
 
   if (!armies || !centers) return null;
   return (
@@ -121,6 +145,22 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
           type="symbol"
           layout={{ "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-allow-overlap": true }}
           paint={{ "text-color": "#fff", "text-halo-color": "rgba(0,0,0,0.75)", "text-halo-width": 1.2 }}
+        />
+      </Source>
+      <Source id="worldmap-air-source" type="geojson" data={airMarks}>
+        <Layer
+          id="worldmap-air"
+          type="symbol"
+          layout={{ "text-field": ["get", "label"], "text-font": FONT, "text-size": 12, "text-allow-overlap": true }}
+          paint={{ "text-color": ["get", "colour"], "text-halo-color": "rgba(255,255,255,0.95)", "text-halo-width": 1.6 }}
+        />
+      </Source>
+      <Source id="worldmap-naval-source" type="geojson" data={navalMarks}>
+        <Layer
+          id="worldmap-naval"
+          type="symbol"
+          layout={{ "text-field": ["get", "label"], "text-font": FONT, "text-size": 13, "text-allow-overlap": true }}
+          paint={{ "text-color": ["case", ["get", "blockade"], "#991b1b", ["get", "colour"]], "text-halo-color": "rgba(255,255,255,0.95)", "text-halo-width": 1.6 }}
         />
       </Source>
     </>
