@@ -19,7 +19,8 @@ import { applyEconomyOps, applyEconomyOpsFromEvents, normalizeEconomyOp } from "
 import { getFrontDecider, setFrontDecider } from "../../runtime/hoi/fronts.js";
 import { createJevClient } from "../../runtime/hoi/jev.js";
 import { runLocalDecisions, updateDecisionMemory } from "../../runtime/hoi/localDecider.js";
-import { advancePolitics, applyPoliticsEffects, canDeclareWar, enableHoiPolitics, politicsEvent } from "../../runtime/hoi/politics.js";
+import { advancePolitics, applyPoliticsEffects, canDeclareWar, enableHoiPolitics, normalizePolitics, politicsEvent, shiftPopularity } from "../../runtime/hoi/politics.js";
+import { ESPIONAGE_TUNING, advanceEspionage, aiAgentFate, applyEspionageOp, decideAgentFate, defaultEspionageOps, espionageEvent } from "../../runtime/hoi/espionage.js";
 import { advanceFocuses, applyFocusEffects, customFocus, focusTreeFor, normalizeFocusState, programmeFor, startFocus } from "../../runtime/hoi/focus.js";
 import { HOI_EQUIPMENT, findIndustrialSites, pickHoiSeries } from "../../runtime/hoi/presets.js";
 import {
@@ -6070,6 +6071,106 @@ const armyMapContext = async (world) => {
   return { catalog, info, capitals };
 };
 
+// Phase 11 : l'espionnage de la période, calculé AVANT que l'IA n'écrive : les
+// ordres par défaut des pays IA (réseau chez leur ennemi, missions), puis les
+// réseaux qui avancent et les missions qui finissent (succès, captures). Null
+// sans couche HOI.
+const resolveEspionageForJump = (bundle, { originDate = "", targetDate = "" } = {}) => {
+  try {
+    const world = bundle?.world;
+    if (!world?.hoi?.nations || !originDate || !targetDate) return null;
+    const player = toCountryName(normalizeString(bundle.game?.country));
+    const wars = warsFor(world);
+    let hoi = world.hoi;
+    const notes = [];
+    for (const polity of Object.keys(hoi.nations)) {
+      if (player && polity.toLowerCase() === player.toLowerCase()) continue;
+      for (const op of defaultEspionageOps(polity, { hoi, enemies: enemiesOf(wars, polity) })) {
+        const applied = applyEspionageOp(op, { hoi, date: originDate });
+        hoi = applied.hoi;
+        if (applied.note.kind !== "dropped") notes.push(applied.note);
+      }
+    }
+    const advanced = advanceEspionage({ ...world, hoi }, { fromDate: originDate, toDate: targetDate, seed: `${normalizeString(bundle.game?.startDate)}|${originDate}` });
+    return { ...advanced, player, notes };
+  } catch (error) {
+    console.warn("[espionage] the period's espionage could not be resolved.", error);
+    return null;
+  }
+};
+
+// Les événements de l'espionnage qui touchent le joueur : ses opérations
+// réussies, les agents pris chez lui ou les siens pris ailleurs.
+const addEngineEspionage = (candidate, engineEspionage, { receipt = null } = {}) => {
+  if (!engineEspionage || !candidate || !Array.isArray(candidate.events)) return;
+  const player = normalizeString(engineEspionage.player).toLowerCase();
+  const language = detectLanguage(candidate.events.map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`).join(" ")) === "fr" ? "fr" : "en";
+  const the = language === "fr" ? frenchPolityWithArticle : (name) => name;
+  const mine = normalizeArray(engineEspionage.results).filter((result) => [result.mission.owner, result.mission.target].some((name) => name.toLowerCase() === player));
+  let count = 0;
+  for (const result of mine) {
+    const event = espionageEvent(result, { language, the });
+    if (!event) continue;
+    const dated = candidate.events.findIndex((entry) => normalizeString(entry?.date) > normalizeString(event.date));
+    insertEventAt(candidate, { ...event, id: `engine-espionage-${candidate.events.length + 1}` }, dated < 0 ? candidate.events.length : dated, EVENT_INDEX_DECODERS);
+    count += 1;
+  }
+  if (count) noteReceipt(receipt, "adjusted", `The engine resolved ${count} espionage operation(s) touching the player and added their events; narrate them, change none of their results.`);
+};
+
+// Après le tour : l'état de l'espionnage calculé au début, les rapports de
+// renseignement, les sabotages, et le sort des agents pris par un pays IA (le
+// joueur décide des siens dans le panneau Politique).
+const applyEngineEspionage = (world, engineEspionage, { date = "", receipt = null } = {}) => {
+  if (!world?.hoi?.nations || !engineEspionage) return world;
+  // Réseaux, missions et agents viennent du calcul du début de saut ; les effets
+  // sur la politique et la recherche sont réappliqués sur l'état du tour (que la
+  // politique de la période a déjà fait avancer), pas recopiés.
+  let hoi = { ...world.hoi, networks: engineEspionage.hoi.networks, spyMissions: engineEspionage.hoi.spyMissions, capturedAgents: engineEspionage.hoi.capturedAgents };
+  let markers = normalizeArray(world.markers);
+  const reports = { ...(hoi.intelReports ?? {}) };
+  const nameIn = (map, polity) => Object.keys(map ?? {}).find((name) => name.toLowerCase() === polity.toLowerCase());
+  for (const result of normalizeArray(engineEspionage.results)) {
+    const { mission, effect } = result;
+    if (result.success && mission.kind === "party" && effect?.ideology) {
+      const key = nameIn(hoi.politics, mission.target);
+      if (key) {
+        const politics = normalizePolitics(hoi.politics[key]);
+        hoi = { ...hoi, politics: { ...hoi.politics, [key]: { ...politics, parties: shiftPopularity(politics.parties, effect.ideology, effect.shift), stability: Math.max(0, politics.stability - ESPIONAGE_TUNING.partyStability) } } };
+      }
+    }
+    if (result.success && mission.kind === "tech" && effect?.techId) {
+      const key = nameIn(hoi.nations, mission.owner);
+      if (key) {
+        const nation = hoi.nations[key];
+        const research = nation.research ?? {};
+        hoi = { ...hoi, nations: { ...hoi.nations, [key]: { ...nation, research: { ...research, partial: { ...(research.partial ?? {}), [effect.techId]: Math.round((Number(research.partial?.[effect.techId]) || 0) + effect.days) } } } } };
+      }
+    }
+    if (result.success && mission.kind === "intel" && effect?.report) {
+      reports[mission.owner] = [...normalizeArray(reports[mission.owner]), { date: result.date, target: mission.target, ...effect.report }].slice(-10);
+    }
+    if (result.success && mission.kind === "sabotage") {
+      const owned = markers.filter((marker) => marker?.building && normalizeString(marker.ownerCode).toLowerCase() === mission.target.toLowerCase());
+      const chosen = owned.find((marker) => marker.id === mission.detail || marker.name === mission.detail)
+        ?? owned.sort((a, b) => (b.building.type === "usine_militaire") - (a.building.type === "usine_militaire") || (b.building.level ?? 0) - (a.building.level ?? 0))[0];
+      if (chosen) {
+        markers = applyBuildingDamage(markers, [{ op: "damage", target: chosen.name, value: effect?.damage ?? 0.35 }], { title: "sabotage" }).markers ?? markers;
+        noteReceipt(receipt, "adjusted", `espionage — ${mission.owner}'s saboteurs damaged ${chosen.name} (${mission.target}).`);
+      }
+    }
+  }
+  hoi = { ...hoi, intelReports: reports };
+  // Les agents pris par un pays IA : son sort, décidé sur-le-champ.
+  const wars = warsFor(world);
+  for (const agent of normalizeArray(engineEspionage.captured)) {
+    if (agent.holder.toLowerCase() === normalizeString(engineEspionage.player).toLowerCase()) continue;
+    const fate = aiAgentFate(hoi, agent, { atWar: (a, b) => atWar(wars, a, b), holderIntelligence: intelligenceOf(world, agent.holder) });
+    hoi = decideAgentFate(hoi, agent.id, fate, { date }).hoi;
+  }
+  return { ...world, hoi, markers };
+};
+
 // Phase 8 : la politique et les focus de la période, calculés par le moteur AVANT
 // que l'IA n'écrive (comme les batailles) : élections et coups dus, focus qui
 // finissent, focus suivants des pays IA (choisis par le décideur local s'il en a
@@ -6140,6 +6241,23 @@ const applyFocusOpsAfterTurn = (world, events, { date = "", receipt = null, play
     focus[polity] = state;
   }
   return { ...world, hoi: { ...world.hoi, focus } };
+};
+
+// Phase 11 : les ordres « spy » de la réponse (economyOps) pour les pays IA : la
+// mission si leur réseau le permet, sinon le réseau à bâtir. Le joueur donne
+// les siens dans le panneau Politique.
+const applySpyOpsAfterTurn = (world, events, { date = "", receipt = null, player = "" } = {}) => {
+  if (!world?.hoi?.nations) return world;
+  const ops = normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.economyOps)).map(normalizeEconomyOp).filter((op) => op?.op === "spy");
+  let hoi = world.hoi;
+  for (const op of ops) {
+    if (player && op.polity.toLowerCase() === player.toLowerCase()) { noteReceipt(receipt, "dropped", "espionage — the player runs their own networks."); continue; }
+    let applied = applyEspionageOp({ op: "mission", polity: op.polity, target: op.target, kind: op.mission, detail: op.detail }, { hoi, date });
+    if (applied.note.kind === "dropped") applied = applyEspionageOp({ op: "build", polity: op.polity, target: op.target }, { hoi, date });
+    noteReceipt(receipt, applied.note.kind, applied.note.text);
+    hoi = applied.hoi;
+  }
+  return hoi === world.hoi ? world : { ...world, hoi };
 };
 
 // L'état politique et des focus que le moteur a calculé, porté sur le monde du
@@ -7794,6 +7912,8 @@ const applySimulationResult = async ({
   // puis les effets des focus achevés et ceux de la politique (production,
   // main-d'œuvre), avant que l'économie n'avance.
   impactedWorld = applyEnginePolitics(impactedWorld, result.enginePolitics, { date: nextGame.gameDate });
+  // Phase 11 : réseaux, rapports, sabotages, vols, et le sort des agents pris par une IA.
+  impactedWorld = applyEngineEspionage(impactedWorld, result.engineEspionage, { date: nextGame.gameDate, receipt });
   // Couche HOI4 (src/runtime/hoi/) : le moteur fait avancer économie et production
   // sur les jours du saut, APRÈS les impacts IA pour que ceux-ci comptent dès ce
   // tour. Inerte tant que la partie n'a pas de world.hoi. Recalculé depuis
@@ -7998,6 +8118,8 @@ const applySimulationResult = async ({
   worldWithImpacts = applyLocalDecisionsAfterTurn(worldWithImpacts, freshEvents, result.localDecisions, { date: nextGame.gameDate, receipt });
   // Phase 8 : les focus que la réponse choisit ou propose pour les pays IA.
   worldWithImpacts = applyFocusOpsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
+  // Phase 11 : les ordres d'espionnage de la réponse pour les pays IA.
+  worldWithImpacts = applySpyOpsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
   // Storylines last: they read the wars and relations as this turn left them.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
@@ -13060,6 +13182,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           if (segmentIndex === 0) addPlayerWars(candidate, bundle, { date: addIsoDays(state.segmentOrigin, 1) || state.segmentOrigin, receipt: draft });
           // Phase 8 : élections, coups d'État et focus achevés, décidés par le moteur.
           if (segmentIndex === 0) addEnginePolitics(candidate, context.enginePolitics, { receipt: draft, player: toCountryName(normalizeString(bundle.game?.country)) });
+          // Phase 11 : les opérations d'espionnage qui touchent le joueur.
+          if (segmentIndex === 0) addEngineEspionage(candidate, context.engineEspionage, { receipt: draft });
           // The engine's battles of the period, as its own events (addEngineBattles).
           if (segmentIndex === 0) addEngineBattles(candidate, context.engineCombat, { world: bundle.world, receipt: draft });
           // The player's proposals were answered before the turn (playerDiplomacy.js):
@@ -13801,6 +13925,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     localDecisions: context.localDecisions ?? null,
     // Phase 8 : la politique et les focus de la période, appliqués avec le tour.
     enginePolitics: context.enginePolitics ?? null,
+    // Phase 11 : l'espionnage de la période, appliqué avec le tour.
+    engineEspionage: context.engineEspionage ?? null,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -13885,6 +14011,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });
   // Phase 8 : élections, coups, focus de la période (resolvePoliticsForJump).
   const enginePolitics = resolvePoliticsForJump(bundle, { originDate, targetDate, orders: localDecisions?.orders });
+  // Phase 11 : réseaux, missions et captures de la période (resolveEspionageForJump).
+  const engineEspionage = resolveEspionageForJump(bundle, { originDate, targetDate });
   const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat, enginePolitics }, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
@@ -13940,6 +14068,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     localDecisions,
     // The period's politics and focuses (resolvePoliticsForJump), or null.
     enginePolitics,
+    // The period's espionage (resolveEspionageForJump), or null.
+    engineEspionage,
     safeDays,
     segmentDays,
     targetDate,

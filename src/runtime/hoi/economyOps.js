@@ -45,11 +45,11 @@ export const ECONOMY_OP_LIMITS = Object.freeze({
   researchBoostMax: 0.25,
 });
 
-export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme", "focus"]);
+export const ECONOMY_OP_KINDS = Object.freeze(["modifier", "stock", "line", "research", "damage", "recruit", "front", "air", "naval", "programme", "focus", "spy"]);
 // Les opérations appliquées au tour, avec la carte (frontsTurn.js), le
-// programme d'un pays pour son décideur local (localDecider.js) et ses focus
-// (phase 8, focus.js).
-export const MAP_OPS = Object.freeze(["front", "air", "naval", "programme", "focus"]);
+// programme d'un pays pour son décideur local (localDecider.js), ses focus
+// (phase 8, focus.js) et son espionnage (phase 11, espionage.js).
+export const MAP_OPS = Object.freeze(["front", "air", "naval", "programme", "focus", "spy"]);
 
 // Phase 7.1 : au plus tant de divisions par demande de recrutement.
 export const RECRUIT_MAX_PER_OP = 5;
@@ -93,6 +93,9 @@ const OP_ALIASES = Object.freeze({
   strategy: "programme",
   focus: "focus",
   nationalfocus: "focus",
+  spy: "spy",
+  espionage: "spy",
+  espionnage: "spy",
 });
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -181,6 +184,17 @@ export const normalizeEconomyOp = (entry) => {
     const count = finite(entry.count ?? entry.amount);
     if (!enemy || !mission) return null;
     return { ...base, enemy, mission, ...(Number.isFinite(count) && count >= 1 ? { count: Math.floor(count) } : {}) };
+  }
+
+  // Phase 11 : de l'espionnage contre un pays (enemy) : une mission (intel,
+  // sabotage, tech, party ; label : l'idéologie soutenue ou la cible), ou le
+  // réseau à bâtir si la mission ne peut pas encore partir.
+  if (op === "spy") {
+    const target = text(entry.enemy ?? entry.target ?? entry.opponent);
+    const mission = normalizeResourceKey(entry.mission);
+    if (!target || !["intel", "sabotage", "tech", "party"].includes(mission)) return null;
+    const detail = text(entry.label ?? entry.detail);
+    return { ...base, target, mission, ...(detail ? { detail: detail.slice(0, 80) } : {}) };
   }
 
   // Phase 8 : un focus national, de l'arbre (focusId) ou sur mesure (label, days,

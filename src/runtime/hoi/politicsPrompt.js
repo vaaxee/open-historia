@@ -37,6 +37,25 @@ export const programmeOf = (hoi, polity) => {
   return clean(memory?.programme) || POWER_PROGRAMMES_1936[nameIn(POWER_PROGRAMMES_1936, polity)] || "";
 };
 
+// Phase 11 : l'espionnage d'un pays, tel que lui le connaît : ses réseaux, ses
+// missions, son dernier rapport sur chaque cible, les agents étrangers qu'il détient.
+export const describeEspionageLine = (hoi, polity) => {
+  const networks = Object.entries(hoi?.networks?.[nameIn(hoi?.networks, polity)] ?? {})
+    .filter(([, network]) => Number(network?.strength) > 0 || network?.building)
+    .map(([target, network]) => `${target} ${Math.round(Number(network.strength) || 0)}${network.building ? " (building)" : ""}`);
+  const missions = list(hoi?.spyMissions).filter((mission) => key(mission?.owner) === key(polity)).map((mission) => `${mission.kind} in ${mission.target}`);
+  const reports = list(hoi?.intelReports?.[nameIn(hoi?.intelReports, polity)]).slice(-3)
+    .map((report) => `${report.target} (${report.date}): ${report.divisions} divisions, ${report.ideology || "?"} regime, stability ${report.stability ?? "?"}%`);
+  const held = list(hoi?.capturedAgents).filter((agent) => key(agent?.holder) === key(polity) && agent.status === "held").map((agent) => `${agent.owner}'s ${agent.mission} agent`);
+  if (!networks.length && !missions.length && !reports.length && !held.length) return "";
+  return [
+    `  Espionage — networks: ${networks.join(", ") || "none"}`,
+    missions.length ? `missions: ${missions.join(", ")}` : "",
+    reports.length ? `latest reports: ${reports.join("; ")}` : "",
+    held.length ? `holds: ${held.join(", ")}` : "",
+  ].filter(Boolean).join("; ") + ".";
+};
+
 // Le bloc complet. `polity` : le pays dont on parle d'abord ; `others` : combien
 // d'autres ; `enginePolitics` : ce que le moteur a décidé pour ce tour (gameplay.js).
 export const buildPoliticsPromptBlock = (world, polity, { others = 0, enginePolitics = null, forTurn = false } = {}) => {
@@ -45,6 +64,8 @@ export const buildPoliticsPromptBlock = (world, polity, { others = 0, enginePoli
   const lines = ["[POLITICS — computed by the engine]"];
   const own = describePoliticsLine(hoi, polity);
   if (own) lines.push(own);
+  const spying = describeEspionageLine(hoi, polity);
+  if (spying) lines.push(spying);
   if (others > 0) {
     const rest = Object.keys(hoi.politics).filter((name) => key(name) !== key(polity))
       .sort((a, b) => list(hoi.armies?.[b]?.divisions).length - list(hoi.armies?.[a]?.divisions).length)
@@ -58,6 +79,7 @@ export const buildPoliticsPromptBlock = (world, polity, { others = 0, enginePoli
   }
   if (forTurn) {
     lines.push("Each AI power pursues its Programme above: what it does this period serves it, or the event says why it departs from it (a shock, a new leader, a crisis). A power that changes course for good gets a new programme (economyOps programme).");
+    lines.push("Espionage is engine-run too: networks grow while a country builds them, and missions (intel, sabotage, tech, party) succeed or get agents caught by the engine's draw. An AI country may order one with economyOps spy (enemy: the target, mission, label: the ideology to support or the building to hit); never narrate a spy success or capture the engine did not decide.");
     lines.push(`Politics is engine-run: stability moves production (±20%), war support moves recruitment, and a country under ${POLITICS_TUNING.minWarSupportToDeclare}% war support cannot start a war of aggression (the engine drops it). Elections and coups happen by the engine's thresholds only: never narrate one it did not decide. An AI country may take a national focus (economyOps focus, focusId from the list above) or propose a custom one (label, days 14-140, effects such as "civil+2; stability+5; divisions:infanterie*2; claim:Gdańsk; opinion:Poland-20"), which the engine validates and bounds.`);
   }
   return lines.filter(Boolean).join("\n");

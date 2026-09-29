@@ -4,6 +4,8 @@
 
 import { availableFocuses, focusStatus, focusTreeFor, normalizeFocusState, startFocus } from "../../runtime/hoi/focus.js";
 import { IDEOLOGIES, IDEOLOGY_WORDS, enableHoiPolitics, normalizePolitics, POLITICS_TUNING, stabilityProductionModifier, warSupportManpowerFactor } from "../../runtime/hoi/politics.js";
+import { ESPIONAGE_TUNING, SPY_MISSIONS, applyEspionageOp, decideAgentFate, missionChances, normalizeNetwork } from "../../runtime/hoi/espionage.js";
+import { intelligenceOf } from "../../runtime/spycraft.js";
 
 const clean = (value) => String(value ?? "").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -94,6 +96,46 @@ export const playerFocusChoices = (world, player) => {
   if (!polity) return [];
   const hoi = politicsOf(world);
   return availableFocuses(polity, hoi.focus?.[nameIn(hoi.focus, polity)], hoi.politics?.[nameIn(hoi.politics, polity)] ?? null);
+};
+
+// Phase 11 — l'onglet Espionnage : ses réseaux (force, chances de chaque
+// mission), les pays où il peut en bâtir, ses missions en cours, ses rapports,
+// les agents étrangers qu'il détient (et dont il décide du sort).
+export const espionagePanelModel = (world, player) => {
+  const polity = nameIn(world?.hoi?.nations, player);
+  if (!polity) return null;
+  const hoi = world.hoi;
+  const own = hoi.networks?.[nameIn(hoi.networks, polity)] ?? {};
+  const mine = intelligenceOf(world, polity);
+  const networks = Object.keys(hoi.nations).filter((name) => key(name) !== key(polity)).map((target) => {
+    const network = normalizeNetwork(own[target]);
+    const theirs = intelligenceOf(world, target);
+    const chances = Object.fromEntries(SPY_MISSIONS.map((kind) => [kind, { ...missionChances({ kind, strength: network.strength, ownerIntelligence: mine, targetIntelligence: theirs }), ready: network.strength >= ESPIONAGE_TUNING.minStrength[kind] }]));
+    return { target, ...network, chances };
+  }).sort((a, b) => b.strength - a.strength || Number(b.building) - Number(a.building) || a.target.localeCompare(b.target));
+  return {
+    polity,
+    intelligence: mine,
+    networks,
+    missions: list(hoi.spyMissions).filter((mission) => key(mission?.owner) === key(polity)),
+    reports: list(hoi.intelReports?.[nameIn(hoi.intelReports, polity)]).slice().reverse(),
+    held: list(hoi.capturedAgents).filter((agent) => key(agent?.holder) === key(polity) && agent.status === "held"),
+    lost: list(hoi.capturedAgents).filter((agent) => key(agent?.owner) === key(polity)).slice(-5),
+  };
+};
+
+// Un ordre d'espionnage du joueur. Renvoie { world, note }.
+export const applyPlayerEspionage = (world, player, op, { date = "" } = {}) => {
+  const polity = nameIn(world?.hoi?.nations, player);
+  if (!polity) return { world, note: { kind: "dropped", text: "espionage — no tracked country." } };
+  const result = applyEspionageOp({ ...op, polity }, { hoi: world.hoi, date });
+  return result.note.kind === "dropped" ? { world, note: result.note } : { world: { ...world, hoi: result.hoi }, note: result.note };
+};
+
+// Le joueur décide du sort d'un agent qu'il détient.
+export const decidePlayerAgent = (world, agentId, fate, { date = "" } = {}) => {
+  const result = decideAgentFate(world?.hoi, agentId, fate, { date });
+  return result.note.kind === "dropped" ? { world, note: result.note } : { world: { ...world, hoi: result.hoi }, note: result.note };
 };
 
 // Le texte d'un effet, pour l'infobulle d'un focus.

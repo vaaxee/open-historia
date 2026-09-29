@@ -6,7 +6,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
-import { applyPlayerFocus, cancelPlayerFocus, focusEffectText, focusPanelModel, politicsPanelModel } from "./focusPoliticsModel.js";
+import { applyPlayerEspionage, applyPlayerFocus, cancelPlayerFocus, decidePlayerAgent, espionagePanelModel, focusEffectText, focusPanelModel, politicsPanelModel } from "./focusPoliticsModel.js";
 import { HOI_WRITE_ERRORS, updateHoiWorld } from "./hoiWrites.js";
 import { describeBusy } from "./frontsPanelText.js";
 import { frenchPolityName } from "../../runtime/polityExonyms.js";
@@ -24,6 +24,12 @@ const WORDS = {
     production: "Production", recruitment: "Recruitment", canDeclare: "Can declare a war of aggression", cannotDeclare: "Cannot declare a war of aggression (war support under 25%)",
     coupRisk: "Risk of a coup", opinions: "Opinions", lastChange: "Last change", election: "election", coup: "coup",
     waiting: (what) => `Waiting for ${what} to finish…`, busy: (what) => `The game is busy (${what}); try again.`,
+    espionage: "Espionage", service: "Intelligence service", networks: "Networks", build: "Build", stop: "Stop", launch: "Launch", target: "Target",
+    missionKinds: { intel: "Intelligence", sabotage: "Sabotage", tech: "Technology theft", party: "Support a party" }, success: "success", capture: "capture",
+    inProgress: "Missions under way", reports: "Intelligence reports", held: "Foreign agents we hold", lostAgents: "Our agents taken",
+    fates: { exchange: "Exchange", trial: "Public trial", turn: "Turn", execute: "Execute" }, compromised: "compromised?", noNetwork: "No network yet.",
+    report: (r) => `${r.divisions} divisions, ${r.manpower.toLocaleString()} men available, stability ${r.stability ?? "?"} %, war support ${r.warSupport ?? "?"} %`,
+    building: "building", party: "Party",
   },
   fr: {
     focus: "Focus national", politics: "Politique", close: "Fermer", none: "Aucun focus en cours : choisissez-en un dans l'arbre.", current: "En cours",
@@ -33,6 +39,12 @@ const WORDS = {
     production: "Production", recruitment: "Recrutement", canDeclare: "Peut déclarer une guerre d'agression", cannotDeclare: "Ne peut pas déclarer de guerre d'agression (soutien sous 25 %)",
     coupRisk: "Risque de coup d'État", opinions: "Opinions", lastChange: "Dernier changement", election: "élection", coup: "coup d'État",
     waiting: (what) => `En attente de la fin de ${what}…`, busy: (what) => `Le jeu est occupé (${what}) ; réessayez.`,
+    espionage: "Espionnage", service: "Service de renseignement", networks: "Réseaux", build: "Bâtir", stop: "Arrêter", launch: "Lancer", target: "Cible",
+    missionKinds: { intel: "Renseignement", sabotage: "Sabotage", tech: "Vol de technologie", party: "Soutien à un parti" }, success: "succès", capture: "capture",
+    inProgress: "Missions en cours", reports: "Rapports de renseignement", held: "Agents étrangers détenus", lostAgents: "Nos agents pris",
+    fates: { exchange: "Échanger", trial: "Procès public", turn: "Retourner", execute: "Exécuter" }, compromised: "compromis ?", noNetwork: "Aucun réseau pour l'instant.",
+    report: (r) => `${r.divisions} divisions, ${r.manpower.toLocaleString("fr-FR")} hommes mobilisables, stabilité ${r.stability ?? "?"} %, soutien ${r.warSupport ?? "?"} %`,
+    building: "en construction", party: "Parti",
   },
 };
 const wordsFor = (language) => (/^fr\b/i.test(language) ? WORDS.fr : WORDS.en);
@@ -157,20 +169,116 @@ const Gauge = ({ label, value, colour, note = "" }) => (
 );
 const PARTY_COLOURS = { democratic: "#3b82f6", communist: "#dc2626", fascist: "#78350f", authoritarian: "#6b7280" };
 
+// Phase 11 : l'onglet Espionnage du panneau Politique.
+const EspionageTab = ({ world, country, language }) => {
+  const w = wordsFor(language);
+  const fr = /^fr\b/i.test(language);
+  const polity = (name) => (fr ? frenchPolityName(name) : name);
+  const date = useRuntimeState("game", selectDate);
+  const model = useMemo(() => espionagePanelModel(world, country), [world, country]);
+  const [target, setTarget] = useState("");
+  const [kind, setKind] = useState("intel");
+  const [party, setParty] = useState("democratic");
+  const { message, pending, run } = useHoiOrder(language);
+  if (!model) return <p style={small}>{w.noCountry}</p>;
+  const chosen = model.networks.find((entry) => entry.target === target) ?? model.networks[0];
+  const pct = (value) => `${Math.round(value * 100)} %`;
+  const active = model.networks.filter((entry) => entry.strength > 0 || entry.building);
+  return (
+    <>
+      {message && <div style={{ ...card, color: "#fde68a", fontSize: "0.74rem" }}>{message}</div>}
+      <div style={card}>
+        <div style={{ fontSize: "0.78rem" }}>{`${w.service} : `}<b>{model.intelligence}</b></div>
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+          <select value={chosen?.target ?? ""} onChange={(event) => setTarget(event.target.value)} style={{ ...button, maxWidth: "11rem" }} aria-label={w.target}>
+            {model.networks.map((entry) => <option key={entry.target} value={entry.target} style={{ color: "black" }}>{`${polity(entry.target)} · ${Math.round(entry.strength)}`}</option>)}
+          </select>
+          {chosen && (chosen.building
+            ? <button type="button" style={button} disabled={pending} onClick={() => run((current) => applyPlayerEspionage(current, country, { op: "stop", target: chosen.target }, { date }))}>{w.stop}</button>
+            : <button type="button" style={button} disabled={pending} onClick={() => run((current) => applyPlayerEspionage(current, country, { op: "build", target: chosen.target }, { date }))}>{w.build}</button>)}
+        </div>
+        {chosen && (
+          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>
+            <select value={kind} onChange={(event) => setKind(event.target.value)} style={button} aria-label={w.launch}>
+              {Object.entries(w.missionKinds).map(([value, label]) => <option key={value} value={value} style={{ color: "black" }}>{`${label} (${w.success} ${pct(chosen.chances[value].success)}, ${w.capture} ${pct(chosen.chances[value].capture)})`}</option>)}
+            </select>
+            {kind === "party" && (
+              <select value={party} onChange={(event) => setParty(event.target.value)} style={button} aria-label={w.party}>
+                {["democratic", "communist", "fascist", "authoritarian"].map((ideology) => <option key={ideology} value={ideology} style={{ color: "black" }}>{ideology}</option>)}
+              </select>
+            )}
+            <button type="button" style={button} disabled={pending || !chosen.chances[kind].ready}
+              onClick={() => run((current) => applyPlayerEspionage(current, country, { op: "mission", target: chosen.target, kind, detail: kind === "party" ? party : "" }, { date }))}>{w.launch}</button>
+          </div>
+        )}
+      </div>
+      <div style={card}>
+        <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>{w.networks}</div>
+        {!active.length && <div style={small}>{w.noNetwork}</div>}
+        {active.map((entry) => (
+          <div key={entry.target} style={{ display: "flex", fontSize: "0.72rem", justifyContent: "space-between" }}>
+            <span>{polity(entry.target)}{entry.building ? ` · ${w.building}` : ""}{entry.compromised ? ` · ${w.compromised}` : ""}</span><span>{Math.round(entry.strength)}</span>
+          </div>
+        ))}
+      </div>
+      {model.missions.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>{w.inProgress}</div>
+          {model.missions.map((mission) => <div key={mission.id} style={{ fontSize: "0.72rem" }}>{`${w.missionKinds[mission.kind]} · ${polity(mission.target)} · ${mission.startDate} (+${mission.days} j)`}</div>)}
+        </div>
+      )}
+      {model.reports.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>{w.reports}</div>
+          {model.reports.map((report, index) => <div key={index} style={{ fontSize: "0.72rem" }}>{`${report.date} · ${polity(report.target)} : ${w.report(report)}`}</div>)}
+        </div>
+      )}
+      {model.held.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>{w.held}</div>
+          {model.held.map((agent) => (
+            <div key={agent.id} style={{ marginTop: "0.3rem" }}>
+              <div style={{ fontSize: "0.72rem" }}>{`${polity(agent.owner)} · ${w.missionKinds[agent.mission] ?? agent.mission} · ${agent.capturedAt}`}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.2rem" }}>
+                {Object.entries(w.fates).map(([fate, label]) => <button key={fate} type="button" style={button} disabled={pending} onClick={() => run((current) => decidePlayerAgent(current, agent.id, fate, { date }))}>{label}</button>)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {model.lost.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: "0.78rem", fontWeight: 700 }}>{w.lostAgents}</div>
+          {model.lost.map((agent) => <div key={agent.id} style={{ fontSize: "0.72rem" }}>{`${polity(agent.holder)} · ${agent.capturedAt} · ${w.fates[agent.status] ?? agent.status}`}</div>)}
+        </div>
+      )}
+    </>
+  );
+};
+
 export const PoliticsPanel = ({ isOpen, onClose }) => {
   const world = useRuntimeState("world", selectWorld);
   const country = useRuntimeState("game", selectCountry);
   const language = getStoredLanguage();
   const w = wordsFor(language);
   const fr = /^fr\b/i.test(language);
+  const [tab, setTab] = useState("politics");
   const model = useMemo(() => (world?.hoi ? politicsPanelModel(world, country, { language }) : null), [world, country, language]);
   const pct = (value) => `${value > 0 ? "+" : ""}${Math.round(value * 100)} %`;
   return (
-    <div data-no-translate="" style={shell(isOpen, "24rem")}>
+    <div data-no-translate="" style={shell(isOpen, "26rem")}>
       <Header title={w.politics} onClose={onClose} closeLabel={w.close} />
       <div style={{ display: "grid", gap: "0.6rem", overflowY: "auto", padding: "0.8rem 1.1rem 1rem" }}>
         {!model && <p style={small}>{w.noCountry}</p>}
         {model && (
+          <div style={{ display: "flex", gap: "0.35rem" }} role="tablist">
+            {[["politics", w.politics], ["espionage", w.espionage]].map(([value, label]) => (
+              <button key={value} type="button" role="tab" aria-selected={tab === value} style={{ ...button, ...(tab === value ? { borderColor: "rgba(96,165,250,0.6)" } : {}) }} onClick={() => setTab(value)}>{label}</button>
+            ))}
+          </div>
+        )}
+        {model && tab === "espionage" && <EspionageTab world={world} country={country} language={language} />}
+        {model && tab === "politics" && (
           <>
             <div style={card}>
               <div style={{ fontSize: "0.8rem" }}>{`${w.ideology} : `}<b>{model.ideologyName}</b></div>

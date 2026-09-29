@@ -283,7 +283,7 @@ test("the AIs read the air and the sea; the schema offers the orders; the turn r
   assert.match(block, /Air and sea:\n- Soviet Union: 1 wing\(s\) on superiority over the front against Lithuania\.\n- Soviet Union: 1 fleet\(s\) on blockade in sea zone 20001\.\n- Soviet Union blockades sea zone 20001/);
   assert.match(block, /economyOps air \(enemy, mission superiority\/support, count of wings\) and naval/);
   const schemas = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplaySchemas.js"), "utf8");
-  assert.match(schemas, /mission: \{ type: "string", enum: \["superiority", "support", "escort", "blockade", "landing"\] \},/);
+  assert.match(schemas, /mission: \{ type: "string", enum: \["superiority", "support", "escort", "blockade", "landing", "intel", "sabotage", "tech", "party"\] \},/);
   const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
   const naval = gameplay.indexOf("? resolveNaval({ world, seas, atWar: warOf");
   const land = gameplay.indexOf("const combat = resolveCombat({", naval);
