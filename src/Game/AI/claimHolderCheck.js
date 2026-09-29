@@ -11,6 +11,10 @@
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
+// Test G après la phase 12 : un pays qui « revendique » sa propre région
+// (l'URSS et Kharkiv) ; le narrateur, sans détenteur, l'a dite polonaise.
+export const isOwnClaim = ({ holder, claimant }) => Boolean(clean(holder)) && key(holder) === key(claimant);
+
 // "" when the story is consistent with who holds the region, else the problem.
 // mentioned: the polities the event's text names (map names); neighbourOwners:
 // who holds the states around the claimed region.

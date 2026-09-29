@@ -15,6 +15,7 @@
 // budget has no room, the guard alone holds.
 
 import { assertsCapitulation, assertsChangeOfHands, detectLanguage } from "./claimGuard.js";
+import { eventDeclaresWar } from "./nativeWarLedger.js";
 import { countriesNamed } from "../../runtime/translationCheck.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -85,14 +86,30 @@ export const scrubRegionCodes = (event, { nameOf = () => "" } = {}) => {
 
 // The narrator's input: every event, its applied changes, and whether the engine
 // already rewrote it as a failed attempt (claimGuard.js).
-export const buildNarrationItems = (events, { nameOf } = {}) => list(events).map((event, index) => ({
+// Test G après la phase 12 : la déclaration de guerre du joueur, rétablie par le
+// moteur, n'était pas dans les changements appliqués ; le narrateur, qui voyait
+// seulement le refus du registre, en a fait des « revendications ». `wars` : les
+// guerres de la réponse (décodées) ; celle qu'ouvre un événement y figure.
+const startedWars = (wars) => list(wars).filter((war) => clean(war?.op).toLowerCase() === "start" && clean(war?.id));
+const warsOpenedBy = (event, index, wars) => startedWars(wars)
+  .filter((war) => list(war.eventIndexes).includes(index) || (clean(event?.warId) && clean(event.warId) === clean(war.id)));
+const warLine = (war) => `${list(war.actors).map(clean).join(", ")} and ${list(war.opponents).map(clean).join(", ")} are at war from this event on (the war is declared and applied)`;
+
+export const buildNarrationItems = (events, { nameOf, wars = [] } = {}) => list(events).map((event, index) => ({
   index,
   date: clean(event?.date),
   title: clean(event?.title),
   description: clean(event?.description),
-  appliedChanges: describeAppliedImpacts(event?.impacts, { nameOf }),
+  appliedChanges: [...describeAppliedImpacts(event?.impacts, { nameOf }), ...warsOpenedBy(event, index, wars).map(warLine)],
   ...(event?.rewrittenFrom ? { refusedByEngine: true } : {}),
 }));
+
+// Les refus qui parlent d'une guerre que le moteur a ensuite rétablie ne sont
+// plus des refus : le narrateur ne les voit pas.
+export const refusalsStillStanding = (refusals, wars) => {
+  const ids = startedWars(wars).map((war) => clean(war.id));
+  return list(refusals).filter((text) => !ids.some((id) => clean(text).includes(id)));
+};
 
 // An answer is usable only whole: one entry per event, each with a title and a
 // description. Returns a complaint, or "" when it is fine.
@@ -134,7 +151,7 @@ export const belongsElsewhere = ({ event, title, description, events = [] }) => 
   return was.size > 0 && now.size > 0 && ![...was].some((name) => now.has(name));
 };
 
-export const applyNarration = (events, payload) => {
+export const applyNarration = (events, payload, { wars = [] } = {}) => {
   const rows = list(payload?.events);
   let changed = 0;
   for (const row of rows) {
@@ -154,6 +171,9 @@ export const applyNarration = (events, payload) => {
     // Each rewrite stays with its own event: none that swaps title and text, takes
     // another event's words, or leaves every country the event was about.
     if (belongsElsewhere({ event, title, description, events })) continue;
+    // La déclaration d'une guerre qui tient reste une déclaration.
+    const index = list(events).indexOf(event);
+    if (warsOpenedBy(event, index, wars).length && eventDeclaresWar(event) && !eventDeclaresWar({ title, description })) continue;
     event.narratedFrom = event.narratedFrom ?? { title: event.title ?? "", description: event.description ?? "" };
     event.title = title;
     event.description = description;

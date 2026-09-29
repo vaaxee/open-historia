@@ -190,7 +190,7 @@ test("the narrator is told only territorial refusals, and no region code reaches
   assert.match(source, /const NARRATION_NOISE = \/could not be placed\|was malformed/);
   assert.match(source, /\.filter\(\(text\) => text && NARRATION_REFUSAL\.test\(text\) && !NARRATION_NOISE\.test\(text\)\)/);
   assert.match(source, /for \(const event of normalizeArray\(payload\?\.events\)\) scrubRegionCodes\(event, \{ nameOf: nameOfRegion \}\);/);
-  assert.match(source, /buildNarrationItems\(events, \{ nameOf: regionNameLookup\(\) \}\)/);
+  assert.match(source, /buildNarrationItems\(events, \{ nameOf: regionNameLookup\(\), wars \}\)/);
 });
 
 // Test F, 15–22 January: the answer's own war read "URSS" against "Lituanie"; the

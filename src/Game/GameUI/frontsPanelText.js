@@ -10,6 +10,15 @@
 import { capitalizeFirst, frenchPolityWithArticle, frenchPolityName } from "../../runtime/polityExonyms.js";
 import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
 
+// « de » devant un groupe nominal : « d'une tâche », « du tour », « de l'avance ».
+export const frenchDe = (what) => {
+  const text = String(what ?? "").trim();
+  if (/^le\s/i.test(text)) return `du ${text.slice(3)}`;
+  if (/^les\s/i.test(text)) return `des ${text.slice(4)}`;
+  if (/^[aeiouyéèêàâîôûh]/i.test(text)) return `d'${text}`;
+  return `de ${text}`;
+};
+
 const WORDS = {
   en: {
     title: "Fronts", close: "Close", tabs: { land: "Land", air: "Air", sea: "Sea" },
@@ -30,7 +39,10 @@ const WORDS = {
     coastsCut: (n) => `${n} coast(s) cut off`, landing: "Landing", onCoast: "Free divisions on your coasts", noCoast: "No enemy coast to land on.",
     divisionsToLand: "Divisions to land", coast: "Coast", prepare: "Prepare", embarked: "Embarked for next turn",
     waiting: (what) => `Waiting for ${what} to finish; your order will then be applied.`, busy: (what) => `The game is still busy (${what}); try again in a moment.`,
-    tasks: { simulateTimelineJump: "the time skip", createInteractive: "the interactive event", consolidateHistoryNow: "the history summary", "held-turn": "the turn held at the Projects board", "held-segment": "a held part of the time skip", task: "a background task" },
+    tasks: { simulateTimelineJump: "the time skip", createInteractive: "the interactive event", consolidateHistoryNow: "the history summary", "held-turn": "the turn held at the Projects board", "held-segment": "a held part of the time skip", task: "a background task",
+      maybeGeneratePregameHistory: "the history before the game starts", retryPendingProjectsJump: "the held turn", retryPendingJumpSegment: "the held part of the time skip",
+      rollBackToSnapshot: "the roll-back", interveneAfterEvent: "the intervention", sendAdvisorDraftedMessage: "the advisor's message",
+      endActiveInteractive: "the end of the interactive event", advanceActiveInteractive: "the interactive event", previewGameMasterCommand: "the GM console", applyGameMasterPreview: "the GM console" },
     jevTitle: "Local decider (Jev)", jevLine: (n, s) => `${n} decision(s) last turn, in ${s} s`, jevStopped: (why) => `stopped: ${why}`,
   },
   fr: {
@@ -51,8 +63,11 @@ const WORDS = {
     contested: "disputée", heldBy: (who) => `tenue par ${who}`, blockadeAgainst: "Blocus contre vous", blockadeHolds: "Votre blocus tient",
     coastsCut: (n) => `${n} côte(s) coupée(s)`, landing: "Débarquement", onCoast: "Divisions libres sur vos côtes", noCoast: "Aucune côte ennemie où débarquer.",
     divisionsToLand: "Divisions à débarquer", coast: "Côte", prepare: "Préparer", embarked: "Embarquées pour le prochain tour",
-    waiting: (what) => `En attente de la fin de ${what} ; votre ordre sera appliqué ensuite.`, busy: (what) => `Le jeu est encore occupé (${what}) ; réessayez dans un instant.`,
-    tasks: { simulateTimelineJump: "l'avance du temps", createInteractive: "l'événement interactif", consolidateHistoryNow: "le résumé de l'histoire", "held-turn": "le tour retenu au tableau des Projets", "held-segment": "une partie retenue de l'avance du temps", task: "une tâche en arrière-plan" },
+    waiting: (what) => `En attente de la fin ${frenchDe(what)} ; votre ordre sera appliqué ensuite.`, busy: (what) => `Le jeu est encore occupé (${what}) ; réessayez dans un instant.`,
+    tasks: { simulateTimelineJump: "l'avance du temps", createInteractive: "l'événement interactif", consolidateHistoryNow: "le résumé de l'histoire", "held-turn": "le tour retenu au tableau des Projets", "held-segment": "une partie retenue de l'avance du temps", task: "une tâche en arrière-plan",
+      maybeGeneratePregameHistory: "l'histoire d'avant la partie", retryPendingProjectsJump: "le tour retenu", retryPendingJumpSegment: "la partie retenue de l'avance du temps",
+      rollBackToSnapshot: "le retour en arrière", interveneAfterEvent: "l'intervention", sendAdvisorDraftedMessage: "le message du conseiller",
+      endActiveInteractive: "la fin de l'événement interactif", advanceActiveInteractive: "l'événement interactif", previewGameMasterCommand: "la console MJ", applyGameMasterPreview: "la console MJ" },
     jevTitle: "Décideur local (Jev)", jevLine: (n, s) => `${n} décision(s) au dernier tour, en ${s} s`, jevStopped: (why) => `arrêté : ${why}`,
   },
 };

@@ -105,7 +105,7 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { canonicalizePayloadPolityNames, capitalizeFirst, frenchPolityName, frenchPolityWithArticle, mentionedPolities } from "../../runtime/polityExonyms.js";
 import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/worldmap/unitEntry.js";
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
-import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
+import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt, isOwnClaim } from "./claimHolderCheck.js";
 import { insertEventAt, planPlayerWars } from "./playerWarOrders.js";
 import {
   VERDICT_INSTRUCTION,
@@ -139,7 +139,7 @@ import { applyFrontsForTurn } from "../../runtime/worldmap/frontsTurn.js";
 import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
 import { loadWorldMapSeas, loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { pendingOrderDescription, pendingOrderTitle, pendingOrdersSummary } from "./fallbackWording.js";
-import { applyNarration, buildNarrationItems, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
+import { applyNarration, buildNarrationItems, refusalsStillStanding, scrubRegionCodes, validateNarration } from "./validatedNarration.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, hashText, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
@@ -6018,6 +6018,30 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
 // Every resolved claim gets its region's name and holder (for the story and the
 // narrator); a claim whose event has a neighbour react as though the region were
 // its own is returned ({ path, regionName, holder, claimant, problem }).
+// Les revendications d'un pays sur une région qu'il détient déjà : retirées des
+// impacts, et renvoyées ({ path, regionName, claimant }).
+const dropOwnClaims = (containers, world) => {
+  const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
+  if (!catalog.length) return [];
+  const worldState = normalizeWorldState(world);
+  const byId = new Map(catalog.map((region) => [normalizeString(region?.id), region]));
+  const holderOf = (id) => normalizeString(worldState.regionSovereigntyOverrides?.[id])
+    || normalizeString(worldState.regionOwnershipOverrides?.[id])
+    || normalizeString(byId.get(id)?.country);
+  const dropped = [];
+  for (const { impacts, path } of containers) {
+    if (!Array.isArray(impacts?.regionClaims)) continue;
+    impacts.regionClaims = impacts.regionClaims.filter((claim) => {
+      const id = normalizeString(claim?.regionId);
+      if (!byId.has(id) || claim?.drop) return true;
+      if (!isOwnClaim({ holder: holderOf(id), claimant: claim?.claimantCode })) return true;
+      dropped.push({ path, regionName: normalizeString(byId.get(id)?.name) || id, claimant: normalizeString(claim?.claimantCode) });
+      return false;
+    });
+  }
+  return dropped;
+};
+
 const checkClaimsAgainstHolders = (containers, world) => {
   const catalog = normalizeArray(getPrimedScenarioRegionCatalog());
   if (!catalog.length) return [];
@@ -6909,6 +6933,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // region were its own, and never names the real holder, is sent back once with
   // the holder named, or noted in the receipt (and the narrator told).
   if (captureGuard && Array.isArray(candidate?.events)) {
+    // Test G après la phase 12 : l'URSS « revendiquait » Kharkiv et Bila Tserkva,
+    // deux de ses propres états, et le récit les a dits polonais. Une revendication
+    // sur sa propre terre est retirée.
+    for (const own of dropOwnClaims(containers, world)) {
+      noteReceipt(receipt, "dropped", `Event "${titleAt(own.path)}": ${own.claimant} claimed ${own.regionName}, which it already holds; the claim was removed (a claim is always on another country's land).`);
+    }
     const claimProblems = checkClaimsAgainstHolders(containers, world);
     if (strict && claimProblems.length) {
       return claimProblems.slice(0, 3).map(describeClaimHolderFeedback).join("\n");
@@ -13376,6 +13406,10 @@ const NARRATION_NOISE = /could not be placed|was malformed|malformed and ignored
 const narrateValidatedSegment = async (payload, { refusals = [], requests = null, signal = null, receipt = null } = {}) => {
   const events = normalizeArray(payload?.events);
   if (!events.length) return 0;
+  // Les guerres qui tiennent (celle du joueur rétablie comprise) : dites au
+  // narrateur, et leurs anciens refus retirés (validatedNarration.js).
+  const wars = decodeWarUpdates(payload?.warUpdates);
+  const standing = refusalsStillStanding(refusals, wars);
   try {
     const response = await runJsonTask("validatedNarration", {
       fallback: () => ({ events: [] }),
@@ -13384,12 +13418,12 @@ const narrateValidatedSegment = async (payload, { refusals = [], requests = null
       validatePayload: (candidate) => validateNarration(candidate, events.length),
       userMessage: "Rewrite the supplied events' titles and descriptions so that they state only what the engine applied. Return exactly one entry per supplied index.",
       variables: {
-        narrationItems: JSON.stringify(buildNarrationItems(events, { nameOf: regionNameLookup() }), null, 2),
-        narrationRefusals: refusals.length ? refusals.map((text) => `- ${text}`).join("\n") : "(nothing was refused)",
+        narrationItems: JSON.stringify(buildNarrationItems(events, { nameOf: regionNameLookup(), wars }), null, 2),
+        narrationRefusals: standing.length ? standing.map((text) => `- ${text}`).join("\n") : "(nothing was refused)",
       },
     });
     if (response?.generation?.source === "fallback") return 0;
-    const changed = applyNarration(events, response?.payload);
+    const changed = applyNarration(events, response?.payload, { wars });
     if (changed) {
       noteReceipt(receipt, "adjusted", `${changed} event${changed === 1 ? " was" : "s were"} rewritten after validation so that the story says only what the engine applied.`);
     }

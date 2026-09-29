@@ -81,9 +81,30 @@ export const EXONYMS = Object.freeze(Object.fromEntries(
   EXONYM_ROWS.map(([foreign, english]) => [ownerIdentityKey(foreign), english]),
 ));
 
+// Test G après la phase 12 : l'onglet Espionnage montrait « Belgian Congo »,
+// « Dominion of Canada », « Guangdong Clique »… Les noms propres du scénario 1936
+// (hoi4-states-copy-copy-2) : [nom de la carte, nom français, genre] — m, f, ou
+// "bare" pour un nom sans article (Cuba, Haïti, Oman).
+export const FRENCH_SCENARIO_ROWS = Object.freeze([
+  ["Aussa", "Sultanat d'Aoussa", "m"], ["Belgian Congo", "Congo belge", "m"], ["Bhutan", "Bhoutan", "m"], ["Bolivia", "Bolivie", "f"],
+  ["British Kuwait", "Koweït britannique", "m"], ["British South Africa", "Union sud-africaine", "f"], ["British Transjordan", "Transjordanie", "f"],
+  ["Chinese Soviet Republic", "République soviétique chinoise", "f"], ["Costa Rica", "Costa Rica", "m"], ["Cuba", "Cuba", "bare"],
+  ["Danish Iceland", "Islande danoise", "f"], ["Dominican Republic", "République dominicaine", "f"], ["Dominion of Australia", "Australie", "f"],
+  ["Dominion of Canada", "Canada", "m"], ["Ecuador", "Équateur", "m"], ["El Salvador", "Salvador", "m"], ["French Syria", "Syrie française", "f"],
+  ["Gansu Ma", "Clique Ma du Gansu", "f"], ["Guangdong Clique", "Clique du Guangdong", "f"], ["Guangxi Clique", "Clique du Guangxi", "f"],
+  ["Guatemala", "Guatemala", "m"], ["Haiti", "Haïti", "bare"], ["Hebei-Chahar", "Conseil du Hebei-Chahar", "m"], ["Honduras", "Honduras", "m"],
+  ["Imperialist Japan", "Japon", "m"], ["Khotan Ma", "Émirat de Khotan", "m"], ["Kuomintang China", "Chine nationaliste", "f"],
+  ["Mandatory Palestine", "Palestine mandataire", "f"], ["Mengjiang", "Mengjiang", "m"], ["Nicaragua", "Nicaragua", "m"],
+  ["Ningxia Ma", "Clique Ma du Ningxia", "f"], ["Northeastern Army", "Armée du Nord-Est", "f"], ["Oman", "Oman", "bare"], ["Panama", "Panama", "m"],
+  ["Paraguay", "Paraguay", "m"], ["Qinghai Ma", "Clique Ma du Qinghai", "f"], ["Shandong Clique", "Clique du Shandong", "f"], ["Shanxi", "Shanxi", "m"],
+  ["Siam", "Siam", "m"], ["Sichuan Clique", "Clique du Sichuan", "f"], ["Sinkiang", "Xinjiang", "m"], ["Uruguay", "Uruguay", "m"],
+  ["Venezuela", "Venezuela", "m"], ["Yemen", "Yémen", "m"], ["Yunnan", "Yunnan", "m"],
+]);
+
 // The usual French name of a map polity (the first French row for it), for the
 // engine's own sentences in a French game; the map's name when there is none.
 const FRENCH_NAMES = new Map();
+for (const [english, french] of FRENCH_SCENARIO_ROWS) FRENCH_NAMES.set(english, french);
 for (const [french, english] of FRENCH_ROWS) if (!FRENCH_NAMES.has(english)) FRENCH_NAMES.set(english, french);
 export const frenchPolityName = (name) => FRENCH_NAMES.get(String(name ?? "").trim()) ?? String(name ?? "").trim();
 
@@ -96,13 +117,16 @@ export const frenchPolityName = (name) => FRENCH_NAMES.get(String(name ?? "").tr
 // Un nom qui n'est pas un nom de pays français connu reste sans article.
 const FRENCH_MASCULINE = new Set(["Royaume-Uni", "Japon", "Empire du Japon", "Portugal", "Danemark", "Luxembourg", "Canada", "Brésil", "Chili",
   "Pérou", "Maroc", "Liban", "Irak", "Tibet", "Népal", "Siam", "Mandchoukouo", "Mexique", "Libéria", "Afghanistan", "Reich allemand",
-  "Troisième Reich", "Touva", "Tannou-Touva", "Bahreïn"]);
+  "Troisième Reich", "Touva", "Tannou-Touva", "Bahreïn",
+  ...FRENCH_SCENARIO_ROWS.filter(([, , gender]) => gender === "m").map(([, french]) => french)]);
 const FRENCH_PLURAL = new Set(["États-Unis", "États-Unis d'Amérique", "Pays-Bas", "Philippines", "Indes néerlandaises"]);
 const FRENCH_BARE = new Set(["URSS"]);
-const FRENCH_KNOWN = new Set(FRENCH_ROWS.map(([french]) => french));
+// Sans article du tout : « Cuba », « de Cuba », « à Cuba ».
+const FRENCH_NO_ARTICLE = new Set(FRENCH_SCENARIO_ROWS.filter(([, , gender]) => gender === "bare").map(([, french]) => french));
+const FRENCH_KNOWN = new Set([...FRENCH_ROWS.map(([french]) => french), ...FRENCH_SCENARIO_ROWS.map(([, french]) => french)]);
 export const frenchWithArticle = (frenchName, form = "") => {
   const name = String(frenchName ?? "").trim();
-  if (!FRENCH_KNOWN.has(name)) return form === "de" ? `de ${name}` : form === "à" ? `à ${name}` : name;
+  if (!FRENCH_KNOWN.has(name) || FRENCH_NO_ARTICLE.has(name)) return form === "de" ? `de ${name}` : form === "à" ? `à ${name}` : name;
   const elided = /^[aeiouyéèêàâîôûœh]/i.test(name) && !FRENCH_PLURAL.has(name);
   if (FRENCH_BARE.has(name)) return form === "de" ? `de l'${name}` : form === "à" ? `à l'${name}` : `l'${name}`;
   if (FRENCH_PLURAL.has(name)) return form === "de" ? `des ${name}` : form === "à" ? `aux ${name}` : `les ${name}`;

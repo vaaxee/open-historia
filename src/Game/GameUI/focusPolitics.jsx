@@ -337,7 +337,8 @@ const DockPanel = ({ Panel, Icon, title, hovered, isOpen, onToggle, setHovered }
   return (
     <>
       {hasOpened && <Panel isOpen={isOpen} onClose={onToggle} />}
-      <button type="button" title={title} style={dockButton(isOpen, hovered)} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onClick={onToggle}>
+      {/* Test G : le traducteur de la page retraduisait ce titre (« Concentrer sur la nation »). */}
+      <button type="button" data-no-translate="" title={title} aria-label={title} style={dockButton(isOpen, hovered)} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onClick={onToggle}>
         <Icon />
       </button>
     </>

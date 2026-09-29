@@ -34,7 +34,7 @@ const MilitaryStats = ({ world, targetCountry }) => {
                     <div style={row}><span>In power</span><span data-no-translate="">{politics.ideologyName}</span></div>
                     <div style={row}><span>Stability / war support</span><span data-no-translate="">{Math.round(politics.stability)} % / {Math.round(politics.warSupport)} %</span></div>
                     {politics.nextElection && <div style={row}><span>Next election</span><span data-no-translate="">{politics.nextElection}</span></div>}
-                    <div style={row}><span>National focus</span><span data-no-translate="">{focus?.current?.name ?? "—"}</span></div>
+                    <div style={row}><span data-no-translate="">{/^fr\b/i.test(language) ? "Focus national" : "National focus"}</span><span data-no-translate="">{focus?.current?.name ?? "—"}</span></div>
                 </div>
             )}
             <div style={box}>
