@@ -5,6 +5,7 @@ import {
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
 import { extractJsonArray } from "./jsonSalvage.js";
+import { liftEventLedgers, liftMisplacedFields } from "./misplacedFields.js";
 import { NARRATION_SCHEMA } from "./validatedNarration.js";
 const textSchema = (description) => ({
   type: "string",
@@ -3465,7 +3466,9 @@ export const normalizeGameplayPayload = (taskKey, value) => {
     }
   }
 
-  const candidate = { ...source };
+  // Test G (Mistral) : « stopDate: », « summary: »… écrits dans la liste des
+  // événements ; remontés dans l'objet (misplacedFields.js).
+  const candidate = { ...liftEventLedgers(liftMisplacedFields(source).value).value };
   const eventAlias = firstDefinedKey(candidate, ["timeline", "newEvents", "generatedEvents"]);
   if (!Array.isArray(candidate.events) && Array.isArray(eventAlias)) candidate.events = eventAlias;
   if (!Array.isArray(candidate.events) && isPlainRecord(candidate.event)) candidate.events = [candidate.event];

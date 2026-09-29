@@ -158,6 +158,19 @@ const isTranslatable = (text) => {
   return trimmed.length > 1 && trimmed.length < 3000 && /[A-Za-z]{2}/.test(trimmed);
 };
 
+// Test G : le texte du mode secours s'affichait avec des astérisques. Le modèle
+// de traduction ajoutait du gras et de l'italique markdown (« **Déclarer la
+// guerre** ») à un texte qui n'en avait pas ; une page n'affiche pas le
+// markdown. Les marques qu'il ajoute sont retirées ; celles de la source restent.
+export const stripAddedMarkdown = (source, translated) => {
+  const text = String(translated ?? "");
+  if (/\*|__/.test(String(source ?? ""))) return text;
+  return text
+    .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+    .replace(/__([^_\n]+?)__/g, "$1")
+    .replace(/(^|[^\w*])\*([^*\n]+?)\*(?=[^\w*]|$)/g, "$1$2");
+};
+
 const applyToTextNode = (node, translated) => {
   const leading = node.nodeValue.match(/^\s*/)[0];
   const trailing = node.nodeValue.match(/\s*$/)[0];
@@ -422,7 +435,7 @@ const processQueue = async () => {
         }
         result.batch.forEach((source, index) => {
           const answered = typeof result.translations[index] === "string"
-            ? result.translations[index].trim()
+            ? stripAddedMarkdown(source, result.translations[index]).trim()
             : "";
           // One that fails the check keeps its source text, so it is neither
           // shown wrong nor asked for again on every start (translationCheck.js).
@@ -627,7 +640,7 @@ const loadServerPack = async () => {
     for (const [source, translated] of Object.entries(pack ?? {})) {
       if (typeof source === "string" && typeof translated === "string" && !cache.has(source)
         && !misalignedReason(source, translated, language)) {
-        cache.set(source, translated);
+        cache.set(source, stripAddedMarkdown(source, translated));
       }
     }
     persistCache();

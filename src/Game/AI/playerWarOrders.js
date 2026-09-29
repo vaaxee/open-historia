@@ -152,6 +152,41 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
   return { started, refused, announced };
 };
 
+// Test G (Mistral, 8–15 janvier) : « L'Union soviétique annule sa déclaration de
+// guerre contre la Pologne », l'ordre du joueur cité dans actionIds. L'IA
+// n'annule jamais un ordre du joueur : seul le moteur peut le refuser. Un
+// événement qui annule, refuse ou inverse un ordre prévu est rejeté.
+const UNDOES = /(\bannul\w*|\brenonc\w*|\brevient sur\b|\bretir\w* (?:sa|son|la|le|ses) (?:déclaration|ordre|décision)|\bsuspend\w*|\babandonn\w*|\brecul\w* sur\b|\brefus\w* de (?:déclarer|lancer|mener|exécuter|appliquer|donner suite)|\bcancel\w*|\bcalls? off\b|\bwithdraw\w* (?:its|the) (?:declaration|order)|\brescind\w*|\brevok\w*|\brevers\w* (?:its|the)\b|\bbacks? down\b|\babandon\w*|\brefus\w* to (?:declare|launch|carry|execute))/i;
+const WAR_UNDONE = /(annul\w*|renonc\w*|retir\w*|revient sur|suspend\w*)[^.]{0,50}déclaration de guerre|(cancel\w*|withdraw\w*|rescind\w*|revok\w*|revers\w*)[^.]{0,40}declaration of war/i;
+
+// The planned player orders an event reverses (their titles), or [].
+export const ordersReversedBy = (event, actions) => {
+  const planned = list(actions).filter((action) => clean(action?.status || "planned") === "planned");
+  if (!planned.length) return [];
+  const text = `${clean(event?.title)}. ${clean(event?.description)}`;
+  const refs = list(event?.impacts?.actionIds).map((ref) => key(ref));
+  const cited = planned.filter((action) => refs.some((ref) => ref && (ref === key(action?.id) || ref === key(action?.title) || ref === key(action?.text))));
+  if (cited.length && UNDOES.test(text)) return cited.map((action) => clean(action?.title || action?.text));
+  const wars = planned.filter((action) => declaresWar(`${clean(action?.title)} ${clean(action?.text)}`));
+  if (wars.length && WAR_UNDONE.test(text)) return wars.map((action) => clean(action?.title || action?.text));
+  return [];
+};
+
+// Takes the event at `index` out of the answer; records that point at events by
+// number follow (a record left pointing at nothing goes with it).
+export const removeEventAt = (candidate, index, decoders = {}) => {
+  candidate.events.splice(index, 1);
+  for (const [field, decode] of Object.entries(decoders)) {
+    if (candidate[field] == null || candidate[field] === "") continue;
+    candidate[field] = decode(candidate[field]).flatMap((record) => {
+      if (!Array.isArray(record?.eventIndexes)) return [record];
+      const indexes = record.eventIndexes.filter((at) => at !== index).map((at) => (at > index ? at - 1 : at));
+      if (record.eventIndexes.length && !indexes.length) return [];
+      return [{ ...record, eventIndexes: indexes }];
+    });
+  }
+};
+
 // Puts `event` at `position` in the answer and moves every record that points at
 // an event by its number (war, storyline, relation and agreement records, as
 // decoded objects) so each still points at the same event.

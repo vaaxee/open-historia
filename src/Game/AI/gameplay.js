@@ -106,7 +106,9 @@ import { canonicalizePayloadPolityNames, capitalizeFirst, frenchPolityName, fren
 import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/worldmap/unitEntry.js";
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt, isOwnClaim } from "./claimHolderCheck.js";
-import { insertEventAt, planPlayerWars } from "./playerWarOrders.js";
+import { misplacedFieldsHint } from "./misplacedFields.js";
+import { describePrunedActors, pruneUnknownActors } from "./pregameActors.js";
+import { insertEventAt, ordersReversedBy, planPlayerWars, removeEventAt } from "./playerWarOrders.js";
 import {
   VERDICT_INSTRUCTION,
   buildProposalThread,
@@ -2942,7 +2944,10 @@ const runJsonTask = async (taskKey, {
       // The skip's budget is asked before every request. A refused FIRST attempt
       // means the skip has nothing left for this task at all; a refused retry
       // leaves whatever the first answer can still give (the salvage pass below).
-      if (budget && !budget.take(outputAttempt === 1 ? (spender || taskKey) : `${spender || taskKey}Retry`)) {
+      // Test G (Mistral) : un tour sans rien d'utilisable reçoit toujours sa
+      // seconde demande avant le mode secours, même le budget épuisé.
+      const mustRetry = outputAttempt === 2 && !salvageCandidate && ["jumpForward", "autoJumpForward"].includes(taskKey);
+      if (budget && !budget.take(outputAttempt === 1 ? (spender || taskKey) : `${spender || taskKey}Retry`) && !mustRetry) {
         const spent = `this time skip has used its ${budget.cap} requests`;
         failureReason = outputAttempt === 1 ? `Not asked: ${spent}.` : `${failureReason} Not asked again: ${spent}.`;
         logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt} not made: ${spent}.`, { spends: budget.log }, { verbose: true });
@@ -3413,7 +3418,7 @@ const runJsonTask = async (taskKey, {
           : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
         history.push({
           role: "user",
-          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}` }],
+          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${misplacedFieldsHint(parsed)} ${retryInstruction}`.replace(/\s+/g, " ") }],
         });
         continue;
       }
@@ -13171,6 +13176,22 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               `Some event dates fell outside ${state.segmentOrigin} to ${segmentTarget} and were moved inside it — ${firstComplaintLine(dateError)}`,
             );
           }
+          // Test G (Mistral) : l'IA n'annule jamais un ordre du joueur
+          // (playerWarOrders.js ordersReversedBy). Renvoyé tant qu'une nouvelle
+          // demande reste, retiré ensuite ; seul le moteur refuse un ordre.
+          const plannedActions = normalizeActions(bundle?.actions);
+          const reversals = normalizeArray(candidate?.events)
+            .map((event, index) => ({ event, index, orders: ordersReversedBy(event, plannedActions) }))
+            .filter((entry) => entry.orders.length);
+          if (reversals.length) {
+            if (strict) {
+              return reversals.map(({ event, orders }) => `$.events: "${normalizeString(event?.title)}" cancels, refuses or reverses the player's order "${orders[0]}". The AI never undoes a player's order — only the engine may refuse one. Tell the order as carried out, or its consequences, and remove that event.`).join("\n");
+            }
+            for (const { event, index, orders } of [...reversals].reverse()) {
+              removeEventAt(candidate, index, EVENT_INDEX_DECODERS);
+              noteReceipt(draft, "dropped", `Event "${normalizeString(event?.title)}" was removed: it undid the player's order "${orders[0]}". The AI never cancels, refuses or reverses a player's order; only the engine may refuse one, and it says so.`);
+            }
+          }
           // The map's tempo, an author's ceiling on how many regions change hands
           // in a period (worldDirection.js): counted in event order, before the
           // resolver spends anything on entries the period cannot carry. Never a
@@ -15849,6 +15870,27 @@ const buildCurrentCanonicalPolityVocabulary = async (world) => {
   return [...byKey.values()].sort((a, b) => a.localeCompare(b));
 };
 
+// Retire des registres de l'histoire d'avant-partie les acteurs qui ne sont pas
+// des pays de la carte ; les notes vont au journal de débogage.
+const prunePregameActors = (candidate, { world = {}, canonicalPolities = [] } = {}) => {
+  const allowed = new Set(normalizeArray(canonicalPolities).map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
+  if (!allowed.size || !candidate) return [];
+  const isKnown = (name) => {
+    const resolved = normalizeString(resolvePolityIdentity(name, world, { allowUnknown: false, requireActive: false, allowCoreMatch: true, allowStockBase: true })?.resolved);
+    return Boolean(resolved) && allowed.has(resolved.toLowerCase());
+  };
+  const { ledgers, notes } = pruneUnknownActors({
+    storylineUpdates: decodeWorldStorylineUpdates(candidate.storylineUpdates),
+    warUpdates: decodeWarUpdates(candidate.warUpdates),
+    relationUpdates: decodeRelationUpdates(candidate.relationUpdates),
+    agreementUpdates: decodeAgreementUpdates(candidate.agreementUpdates),
+  }, isKnown);
+  if (!notes.length) return [];
+  Object.assign(candidate, ledgers);
+  logDebugEvent("ai", "Pregame history: actors that are not countries were left out.", notes.map(describePrunedActors), { verbose: true });
+  return notes;
+};
+
 const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolities = [] } = {}) => {
   const allowedByKey = new Map(
     normalizeArray(canonicalPolities)
@@ -16034,6 +16076,9 @@ const validatePregameCanonicalBootstrap = (
   const eventError = validatePregameEvents(candidate, { startDate, strict });
   if (eventError) return eventError;
 
+  // Test G : un acteur qui n'est pas un pays (« League of Nations ») est retiré
+  // de l'enregistrement au lieu de faire échouer toute la génération (pregameActors.js).
+  prunePregameActors(candidate, { world, canonicalPolities });
   const polityError = validatePregamePolityVocabulary(candidate, { world, canonicalPolities });
   if (polityError) return polityError;
 
