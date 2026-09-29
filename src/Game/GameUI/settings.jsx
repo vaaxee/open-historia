@@ -1932,6 +1932,16 @@ const SettingsWorkspace = ({
                         </select>
                         <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
                     </div>
+                    {/* Phase 9 : les animations de la carte mondiale (Game/Map/motion). */}
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-map-animations">Map animations</label>
+                        <select id="game-map-animations" value={mapAnimations || "full"} onChange={(event) => setMapSettingValue(MAP_SETTING_KEYS.animations, event.target.value === "full" ? "" : event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                            <option value="full" style={{ color: "black" }}>Full</option>
+                            <option value="reduced" style={{ color: "black" }}>Reduced</option>
+                            <option value="off" style={{ color: "black" }}>Off</option>
+                        </select>
+                        <div style={helperStyle}>Full: captures spread from the neighbouring state, battles pulse, fronts move, divisions glide, and the camera flies over the turn's changes (with a Skip button). Reduced: shorter, without the ambient motion or the flyover. Off: every change appears at once.</div>
+                    </div>
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
                         list only suggests common safe ones. Empty = whatever the
@@ -2222,6 +2232,8 @@ const SettingsMenu = ({
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
+    // Phase 9 : "" (complètes), "reduced" ou "off".
+    const mapAnimations = useMapSettingValue(MAP_SETTING_KEYS.animations);
     // The field shows the keystrokes; the setting stores them trimmed. Storing
     // on every keystroke through setMapSettingValue's trim and echoing the
     // stored value back used to eat a space the moment it was typed, so "Times

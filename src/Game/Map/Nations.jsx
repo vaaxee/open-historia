@@ -1129,18 +1129,21 @@ const WorldMap = ({ isGlobe = false }) => {
       const featureLayers = [
         ...V_NEXT_MARKER_SHAPE_LAYER_IDS,
         "markers-shapes",
+        // Phase 9 : l'icône d'un bâtiment ouvre sa fiche (Features.jsx BuildingDetails).
+        "markers-building-icons",
         "cities-shapes",
       ].filter((id) => map.getLayer(id));
       const featureHits = featureLayers.length
         ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
         : [];
       if (!featureHits.length) return null;
-      const hit = featureHits.find((entry) => entry.layer.id.startsWith("markers-shapes")) ?? featureHits[0];
+      const isMarkerLayer = (id) => id.startsWith("markers-shapes") || id === "markers-building-icons";
+      const hit = featureHits.find((entry) => isMarkerLayer(entry.layer.id)) ?? featureHits[0];
       const props = hit.properties ?? {};
       const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
       const host = resolveRegionHit();
       const hostCountry = host?.owner || (host?.owner === "" ? "" : toCountryName(host?.gid0 ?? ""));
-      return hit.layer.id.startsWith("markers-shapes")
+      return isMarkerLayer(hit.layer.id)
         ? {
           source: "marker",
           id: props.id,

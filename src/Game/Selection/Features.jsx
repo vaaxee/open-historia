@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { useWorldState } from "../Map/useWorldState.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { HOI_BUILDING_TYPES, describeBuildingEffect } from "../../runtime/hoi/buildings.js";
+import { HOI_BUILDING_TYPES } from "../../runtime/hoi/buildings.js";
+import { buildingSheetRows } from "./buildingSheet.js";
 import { provinceAt, provinceUsage } from "../../runtime/hoi/provinces.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { TERRAIN_LABELS } from "../../../server/hoiTerrain.js";
@@ -152,8 +153,10 @@ const BuildingDetails = ({ building }) => {
   return (
     <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "6px 0 4px", paddingTop: "4px" }}>
       <DetailRow label="Building" value={<span data-no-translate>{spec.label}</span>} />
-      <DetailRow label="Level" value={<span data-no-translate>{building.level} / {spec.maxLevel}</span>} />
-      <DetailRow label="Effect" value={<span data-no-translate>{describeBuildingEffect(building)}</span>} />
+      {/* Phase 9 : niveau, production réelle, entretien, effet, dégâts (buildingSheet.js). */}
+      {buildingSheetRows(building).map((row) => (
+        <DetailRow key={row.key} label={row.label} value={<span data-no-translate>{row.value}</span>} />
+      ))}
       <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", marginTop: "3px" }}>
         <div style={{ display: "flex", justifyContent: "space-between" }}>
           <span>Condition</span>

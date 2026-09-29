@@ -114,6 +114,18 @@ export const registerWorldMapRoutes = (app) => {
     zones = Object.fromEntries(Object.entries(zones).filter(([, zone]) => !zone?.lake));
     res.json({ zones, stateSeas });
   });
+  // Phase 9 : le relief, tuiles d'altitude Terrarium des zooms 0 à 4
+  // (hoi-elevation/terrarium ; scripts/worldmap/dem-pyramid.mjs pour 0 à 3).
+  // 204 quand une tuile manque : MapLibre dessine alors sans relief.
+  app.get("/api/worldmap/dem/:z/:x/:y.png", (req, res) => {
+    const z = int(req.params.z); const x = int(req.params.x); const y = int(req.params.y);
+    if (z === null || x === null || y === null || z < 0 || z > 4) return res.status(400).end();
+    const file = path.join(DATA_DIR, "hoi-elevation", "terrarium", String(z), String(x), `${y}.png`);
+    if (!fs.existsSync(file)) return res.status(204).end();
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    fs.createReadStream(file).pipe(res);
+  });
   app.get("/api/worldmap/status", (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...worldMapStatus(), game: Boolean(activeGameWorldMapFile()) });

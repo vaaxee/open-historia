@@ -38,13 +38,24 @@ export const MAP_LAYER_ORDER = [
   // Carte mondiale unique (phase 5) : opaque, elle couvre l'ancienne carte
   // politique quand elle est active ; les noms et les objets restent au-dessus.
   "worldmap-sea",
+  // Phase 9 (proposition v3) : le halo des côtes sur la mer, le terrain sous les
+  // aplats politiques translucides, le relief ombré par-dessus.
+  "worldmap-coast-halo",
+  "worldmap-terrain",
   "worldmap-fill",
+  "worldmap-relief",
   // Occupied states, hatched in their lawful sovereign's colour over the occupier's.
   "worldmap-occupation",
   "worldmap-province-lines",
   "worldmap-country-borders",
+  "worldmap-country-borders-inner",
+  // Phase 9 : la frontière qu'une annexion redessine.
+  "motion-border",
+  // Phase 9 : l'onde d'un blocus sur sa zone de mer.
+  "motion-blockade",
   // Phase 7.6 : les fronts (traits et flèches), sur les frontières.
   "worldmap-fronts",
+  "worldmap-fronts-motion",
   "worldmap-front-arrows",
   "worldmap-front-draw",
 
@@ -73,8 +84,12 @@ export const MAP_LAYER_ORDER = [
   "markers-shapes-local",
   "markers-labels-local",
 
+  // Phase 9 : les bâtiments comptés par état (vue de loin).
+  "worldmap-buildings-count",
   // Phase 7.6 : les batailles du dernier tour et les pions des armées.
+  "motion-battles",
   "worldmap-battles",
+  "motion-moves",
   "worldmap-armies",
   "worldmap-armies-count",
   // Phase 7.8 : escadres et flottes en mission.

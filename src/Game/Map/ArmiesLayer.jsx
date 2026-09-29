@@ -11,6 +11,8 @@ import { divisionStrength, templatesFor } from "../../runtime/hoi/armies.js";
 import { airFeatures, armyStackFeatures, battleFeatures, frontFeatures, navalFeatures } from "./armyFeatures.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { useFrontDraw } from "./frontDrawStore.js";
+import ArmiesMotion from "./motion/ArmiesMotion.jsx";
+import BuildingCounters from "./BuildingCounters.jsx";
 
 const selectArmies = (world) => world?.hoi?.armies ?? null;
 const selectFronts = (world) => world?.hoi?.fronts ?? null;
@@ -97,6 +99,14 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
           layout={{ "line-cap": "round" }}
           paint={{ "line-color": ["get", "colour"], "line-width": ["interpolate", ["linear"], ["zoom"], 2, 2, 6, 5], "line-opacity": 0.9, "line-dasharray": [1, 0.6] }}
         />
+        {/* Phase 9 : un front qui attaque ou perce ondule (motion/ArmiesMotion.jsx). */}
+        <Layer
+          id="worldmap-fronts-motion"
+          type="line"
+          filter={["all", ["==", ["get", "kind"], "front"], ["!=", ["get", "posture"], "hold"]]}
+          layout={{ "line-cap": "butt" }}
+          paint={{ "line-color": "#fff6dc", "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1, 6, 2.2], "line-opacity": 0.75, "line-dasharray": [2, 2] }}
+        />
         <Layer
           id="worldmap-front-arrows"
           type="line"
@@ -163,6 +173,10 @@ const ArmiesLayer = ({ stateOwners = {}, colourOf = () => "#888" }) => {
           paint={{ "text-color": ["case", ["get", "blockade"], "#991b1b", ["get", "colour"]], "text-halo-color": "rgba(255,255,255,0.95)", "text-halo-width": 1.6 }}
         />
       </Source>
+      {/* Phase 9 : le motion design des armées (batailles, glissements, fronts, blocus, survol). */}
+      <ArmiesMotion map={map} centers={centers} battles={battles} armies={armies} blockades={blockades} seas={seas} navalMarks={navalMarks} colourOf={colourOf} />
+      {/* Phase 9 : les bâtiments comptés par état, vus de loin. */}
+      <BuildingCounters map={map} centers={centers} />
     </>
   );
 };

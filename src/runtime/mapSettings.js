@@ -79,6 +79,10 @@ export const MAP_SETTING_KEYS = {
     // default — read with getMapSetting ; éteint, ou sans réponse du serveur,
     // les règles du moteur décident.
     localDecider: "ai_local_decider_jev",
+    // Phase 9 : les animations de la carte mondiale (Game/Map/motion) :
+    // "full" (défaut, valeur absente), "reduced" ou "off". Lu avec
+    // getMapSettingValue.
+    animations: "map_animations",
 };
 
 // Families the label-font pickers suggest — Settings → Map and the game and
@@ -152,6 +156,7 @@ export function getMapSettingValue(key, fallback = "") {
 const VALUE_SETTING_LABELS = {
     [MAP_SETTING_KEYS.basemapStyle]: "Basemap",
     [MAP_SETTING_KEYS.labelFont]: "Label font",
+    [MAP_SETTING_KEYS.animations]: "Map animations",
 };
 
 export function setMapSettingValue(key, value) {
