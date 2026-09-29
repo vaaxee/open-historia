@@ -11,6 +11,10 @@ import { logDebugEvent } from "../../runtime/debugLog.js";
 
 // A counter, not a boolean: independent generators overlap.
 let activeSimulations = 0;
+// What is running, by name (test G with Jev: the Fronts panel said "a time skip
+// is running" after the turn had landed, and only a reload cleared it; the panel
+// now says which task it waits for).
+const runningTasks = new Map();
 
 // A jump held on a failed segment, and a turn held at the Projects board.
 let pendingJumpSegment = null;
@@ -19,13 +23,32 @@ let pendingProjectsJump = null;
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
 
-export const beginSimulation = () => {
-  activeSimulations += 1;
+// The calling function's name, read off the stack ("createInteractive",
+// "consolidateHistoryNow"…), or "task" when the stack says nothing usable.
+const callerName = () => {
+  const lines = String(new Error().stack ?? "").split("\n").map((line) => line.trim());
+  const frame = lines.find((line, index) => index > 0 && !/callerName|beginSimulation|endSimulation/.test(line) && /^at /.test(line));
+  return frame?.match(/^at (?:async )?([\w$.]+)/)?.[1]?.split(".").pop() || "task";
 };
 
-export const endSimulation = () => {
-  activeSimulations = Math.max(0, activeSimulations - 1);
+export const beginSimulation = (label = callerName()) => {
+  activeSimulations += 1;
+  runningTasks.set(label, (runningTasks.get(label) ?? 0) + 1);
 };
+
+export const endSimulation = (label = callerName()) => {
+  activeSimulations = Math.max(0, activeSimulations - 1);
+  const left = (runningTasks.get(label) ?? 0) - 1;
+  if (left > 0) runningTasks.set(label, left);
+  else runningTasks.delete(label);
+};
+
+// The names of what keeps the game busy: running tasks, a held turn or segment.
+export const busyReasons = () => [
+  ...runningTasks.keys(),
+  ...(pendingProjectsJump !== null ? ["held-turn"] : []),
+  ...(pendingJumpSegment !== null ? ["held-segment"] : []),
+];
 
 export const getPendingJumpSegment = () => pendingJumpSegment;
 export const setPendingJumpSegment = (value) => {

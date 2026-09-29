@@ -6,7 +6,7 @@
 // tableau des Projets. Pendant un saut, rien n'est écrit : le tour réécrit le
 // monde à la fin, et le choix du joueur serait perdu sans un mot.
 
-import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { busyReasons, isSimulationBusy } from "../AI/simulationStatus.js";
 import { readWorldState, writeWorldState } from "../../runtime/gameState.js";
 
 // `mutate(hoi)` renvoie { hoi } pour écrire, ou { error } pour refuser.
@@ -21,10 +21,25 @@ export const updateHoiLayer = async (mutate) => {
   return { ok: true, error: null, notes: result.notes ?? [] };
 };
 
+// Test G avec Jev : après un tour, le panneau Fronts répondait « un saut est en
+// cours » jusqu'à ce que la page soit rechargée. Une écriture du panneau attend
+// maintenant la fin de ce qui occupe le jeu (au plus `waitMs`), puis s'applique ;
+// `onWait(reasons)` dit au panneau ce qu'il attend.
+export const waitUntilIdle = async ({ waitMs = 180000, stepMs = 500, onWait = null, isBusy = isSimulationBusy, reasons = busyReasons, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) => {
+  let waited = 0;
+  while (isBusy()) {
+    if (waited >= waitMs) return false;
+    if (typeof onWait === "function") onWait(reasons());
+    await sleep(stepMs);
+    waited += stepMs;
+  }
+  return true;
+};
+
 // Phase 3 : une écriture qui touche aussi les structures de la carte (un chantier
 // est une structure). `mutate(world)` renvoie { world } ou { error }.
-export const updateHoiWorld = async (mutate) => {
-  if (isSimulationBusy()) return { ok: false, error: "busy" };
+export const updateHoiWorld = async (mutate, { onWait = null, waitMs = 180000 } = {}) => {
+  if (isSimulationBusy() && !(await waitUntilIdle({ onWait, waitMs }))) return { ok: false, error: "busy", reasons: busyReasons() };
   const world = await readWorldState({ force: true });
   if (!world?.hoi) return { ok: false, error: "no-hoi" };
   const result = mutate(world) ?? {};

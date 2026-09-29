@@ -16,7 +16,7 @@
 // game's language, and a war the answer started from some other event is moved
 // onto that announcement, which comes first.
 
-import { createPolityNameTranslator, frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { createPolityNameTranslator, frenchPolityWithArticle, mentionedPolities } from "../../runtime/polityExonyms.js";
 import { eventDeclaresWar } from "./nativeWarLedger.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -52,8 +52,8 @@ const DECLARATION_WORDING = {
     description: `By order of its government, ${player} declares war on ${target}. From today the two are at war.`,
   }),
   fr: (player, target) => ({
-    title: `Déclaration de guerre : ${frenchPolityName(player)} contre ${frenchPolityName(target)}`,
-    description: `Sur ordre de son gouvernement, ${frenchPolityName(player)} déclare la guerre à ${frenchPolityName(target)}. À partir d'aujourd'hui, les deux pays sont en guerre.`,
+    title: `Déclaration de guerre : ${frenchPolityWithArticle(player)} contre ${frenchPolityWithArticle(target)}`,
+    description: `Sur ordre de son gouvernement, ${frenchPolityWithArticle(player)} déclare la guerre ${frenchPolityWithArticle(target, "à")}. À partir d'aujourd'hui, les deux pays sont en guerre.`,
   }),
 };
 
@@ -103,6 +103,16 @@ export const planPlayerWars = ({ actions, world, player, warUpdates = [], events
     if (existing && list(existing.eventIndexes).some((index) => eventDeclaresWar(list(events)[index]))) {
       // Announced by the answer itself: kept, and protected like the engine's own.
       announced.push({ action, target, id: clean(existing.id) });
+      continue;
+    }
+    // Test G with Jev: the answer started the war on one event and told the
+    // declaration in another ("Déclaration de guerre de l'Union soviétique contre
+    // la Pologne"); the engine then added its own — two declarations. That
+    // event becomes the war's announcement, and the engine adds none.
+    const declaring = list(events).findIndex((entry) => eventDeclaresWar(entry)
+      && mentionedPolities(`${clean(entry?.title)}. ${clean(entry?.description)}`, world).some((name) => key(name) === key(target)));
+    if (existing && declaring >= 0) {
+      announced.push({ action, target, id: clean(existing.id), index: declaring });
       continue;
     }
     const id = clean(existing?.id) || `war-${slug(player)}-${slug(target)}-${slug(date) || "start"}`;

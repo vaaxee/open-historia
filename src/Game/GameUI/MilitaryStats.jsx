@@ -4,6 +4,7 @@ import { militaryStats } from "./militaryStats.js";
 import { sheetWords } from "./battleSheet.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
 import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
+import { jevChoiceText } from "./frontsPanelText.js";
 
 const box = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", marginTop: "0.8rem", padding: "0.65rem 0.8rem" };
 const heading = { color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", marginBottom: "0.4rem", textTransform: "uppercase" };
@@ -76,6 +77,14 @@ const MilitaryStats = ({ world, targetCountry }) => {
                     </div>
                 ))}
             </div>
+            {stats.localDecisions.length > 0 && (
+                <div style={box}>
+                    <div style={heading}>Local decider (Jev), last turn</div>
+                    {stats.localDecisions.map((decision, index) => (
+                        <div key={`jev-${index}`} style={{ ...row, justifyContent: "flex-start" }}><span data-no-translate="">{jevChoiceText(decision.choice, language)}</span></div>
+                    ))}
+                </div>
+            )}
             <div style={box}>
                 <div style={heading}>Fronts</div>
                 {stats.fronts.length === 0 && <div style={row}><span>No front</span></div>}

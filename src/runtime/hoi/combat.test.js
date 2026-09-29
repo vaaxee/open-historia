@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COMBAT_TUNING, applyCombatOutcome, battleEvent, describeBattles, divisionPower, resolveCombat, seededRandom, weatherAt } from "./combat.js";
+import { COMBAT_TUNING, advanceAllowance, applyCombatOutcome, battleEvent, describeBattles, divisionPower, resolveCombat, seededRandom, weatherAt } from "./combat.js";
 import { templatesFor } from "./armies.js";
 import { buildWarMap } from "../worldmap/warMap.js";
 
@@ -64,13 +64,43 @@ test("six Soviet divisions against one Lithuanian on open ground: Kaunas is take
   assert.equal(outcome.s0.stateId, captures.at(-1).stateId, "the attackers stand where the breakthrough stopped");
 });
 
-// Test G: thirty divisions in breakthrough against garrisons took one state in a week.
-test("a breakthrough keeps going while nothing stops it, up to the front's weekly ceiling", () => {
+// Test G: thirty divisions in breakthrough against garrisons took one state in a
+// week; test G with Jev: then three in a row, 300 km deep, in January. A
+// breakthrough now widens the breach along the line it started from, and never
+// goes deeper than the states that touched it.
+test("a breakthrough takes what touches its starting line, within its weekly advance, never deeper", () => {
   const { battles, captures } = run(world({ posture: "breakthrough", lithuanian: 0 }));
-  assert.equal(captures.length, 3, "Kaunas, then what lies behind it, up to three");
-  assert.deepEqual(battles.map((b) => b.result), ["captured", "captured", "captured"]);
-  assert.equal(battles[0].stateName, "Kaunas");
-  assert.ok(battles[1].factors.fatigue < 1 && battles[2].factors.fatigue < battles[1].factors.fatigue, "each bound tires the attack");
+  assert.deepEqual(captures.map((c) => c.stateId), ["kaunas", "alytus"], "Kaunas, then Alytus beside it; Memel lies behind Kaunas");
+  assert.deepEqual(battles.map((b) => b.result), ["captured", "captured"]);
+  assert.ok(battles[1].factors.fatigue < 1, "each bound tires the attack");
+});
+
+test("the advance: points per week by posture, halved in winter, less in mud; a capture costs by terrain", () => {
+  assert.equal(advanceAllowance({ posture: "attack", days: 7 }), 2);
+  assert.equal(advanceAllowance({ posture: "breakthrough", days: 7 }), 3);
+  assert.equal(advanceAllowance({ posture: "breakthrough", days: 7, weather: "winter" }), 1.5);
+  assert.equal(advanceAllowance({ posture: "attack", days: 7, weather: "winter" }), 1);
+  assert.equal(advanceAllowance({ posture: "attack", days: 14, weather: "mud" }), 2.4);
+  assert.equal(COMBAT_TUNING.captureCost.marais, 1.5);
+  // January, a marsh first: one capture only (1.5 points spent of 1.5).
+  const winter = resolveCombat({ world: world({ posture: "breakthrough", lithuanian: 0 }), map: map({ kaunas: { ...info.kaunas, terrain: "marais" } }), atWar, date: "1936-01-10", days: 7, seed: "g" });
+  assert.deepEqual(winter.captures.map((c) => c.stateId), ["kaunas"]);
+});
+
+test("a defended capital does not fall at its first battle", () => {
+  const capitalOf = (polity) => (polity === "Lithuania" ? "kaunas" : "");
+  const first = run(world({ posture: "breakthrough", soviet: 30 }), { capitalOf });
+  const [battle] = first.battles;
+  assert.equal(battle.stateId, "kaunas");
+  assert.equal(battle.result, "stalemate", "held despite the odds");
+  assert.equal(battle.factors.capitalHolds, true);
+  assert.ok(battle.power.ratio >= COMBAT_TUNING.captureRatio);
+  // Fought over once already: it can fall.
+  const again = world({ posture: "breakthrough", soviet: 30 });
+  again.hoi.battleLog = [{ stateId: "kaunas" }];
+  assert.equal(run(again, { capitalOf }).battles[0].result, "captured");
+  // Undefended, it falls like any state.
+  assert.equal(run(world({ posture: "breakthrough", lithuanian: 0 }), { capitalOf }).battles[0].result, "captured");
 });
 
 // Test G: "3000 / 0 men" at 47 to 1 against a garrison.
@@ -131,7 +161,8 @@ test("the battle's own event, and the sheet the AI reads", () => {
   const event = battleEvent(battles[0], { language: "fr", nameOf: (name) => ({ "Soviet Union": "Union soviétique", Lithuania: "Lituanie" })[name] ?? name });
   // The places by their French names of the time (Kaunas was Kovno).
   assert.equal(event.title, "Bataille de Kovno : prise");
-  assert.match(event.description, /^Union soviétique attaque Kovno, tenue par Lituanie\. Pertes : .+ Kovno passe sous le contrôle de Union soviétique ; les défenseurs se replient sur (Alytus|Memel)\.$/);
+  // Test G avec Jev : les articles (« attaque Rovno, tenue par Pologne… de Union soviétique »).
+  assert.match(event.description, /^L'Union soviétique attaque Kovno, tenue par la Lituanie\. Pertes : [\d\s ]+ hommes pour l'Union soviétique, [\d\s ]+ pour la Lituanie\. Kovno passe sous le contrôle de l'Union soviétique ; les défenseurs se replient sur (Alytus|Memel)\.$/);
   const garrison = battleEvent({ ...battles[0], retreatTo: "", garrisonTaken: 3000 }, { language: "fr" });
   assert.match(garrison.description, /la garnison \(3[\s  ]000 hommes\) est tuée ou capturée\.$/);
   assert.deepEqual(event.impacts.regionControlOps, [{ op: "control", regionId: "kaunas", regionName: "Kaunas", fromCode: "Lithuania", toCode: "Soviet Union", note: `engine battle ${battles[0].id}` }]);

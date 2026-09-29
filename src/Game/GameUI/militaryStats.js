@@ -64,9 +64,13 @@ export const militaryStats = (world, polity) => {
     shipsLost: round2(sunk),
     battles: navalBattles.slice(-5).reverse(),
   };
+  // Test G avec Jev : ce que le décideur local a choisi pour ce pays au dernier tour.
+  const localDecisions = list(hoi.lastLocalDecisions?.decisions).filter((decision) => key(decision.polity) === key(name))
+    .map((decision) => ({ question: decision.question, choice: decision.choice, ms: decision.ms }));
   return {
     air,
     navy,
+    localDecisions,
     polity: name,
     divisions,
     totalDivisions: army.divisions.length,

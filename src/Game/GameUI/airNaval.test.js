@@ -140,6 +140,6 @@ test("map counters: land stacks without wings and fleets; âœˆ over the front, âš
   assert.match(layer, /counts: \(division\) => templates\[division\.template\]\?\.kind === "land",/);
   assert.match(layer, /<Source id="worldmap-naval-source" type="geojson" data=\{navalMarks\}>/);
   const panel = read("fronts.jsx");
-  assert.match(panel, /const TABS = \[\["land", "Land"\], \["air", "Air"\], \["sea", "Sea"\]\];/);
-  assert.match(panel, /onClick=\{\(\) => runSea\(\{ op: "land", stateId: coast, count: landForm\.count \}\)\}>Prepare<\/button>/);
+  assert.match(panel, /const TABS = \["land", "air", "sea"\];/);
+  assert.match(panel, /onClick=\{\(\) => runSea\(\{ op: "land", stateId: coast, count: landForm\.count \}\)\}>\{w\.prepare\}<\/button>/);
 });

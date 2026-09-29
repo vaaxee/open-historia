@@ -140,6 +140,9 @@ export const applyNarration = (events, payload) => {
   for (const row of rows) {
     const event = list(events)[Number(row?.index)];
     if (!event) continue;
+    // Test G : un événement du moteur (bataille, blocus, déclaration) dit
+    // exactement ce qui s'est passé, et où ; le narrateur n'y touche pas.
+    if (clean(event.source) === "engine") continue;
     const title = clean(row.title);
     const description = clean(row.description);
     if (title === clean(event.title) && description === clean(event.description)) continue;

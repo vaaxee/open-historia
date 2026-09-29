@@ -528,6 +528,12 @@ export const deriveEventFocusBounds = (event, context) => {
 
   const tiers = [
     () => (impacts.regionTransfers ?? []).map((transfer) => transferBounds(transfer, context)),
+    // Test G : une bataille du moteur prend un état par regionControlOps ; une
+    // bataille sans prise garde son lieu dans sa fiche.
+    () => [
+      ...(impacts.regionControlOps ?? []).map((op) => transferBounds(op, context)),
+      ...(event?.battle?.stateId ? [regionBoundsFor(event.battle.stateId, context)] : []),
+    ],
     () => impactPointBounds(impacts),
     () => (impacts.polityChanges ?? []).map((change) => resolvePolityBounds(change?.code, context)),
     // A transfer whose region we could not place still names who won and lost
@@ -651,10 +657,15 @@ export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitNa
 // centre. A centre that is missing is null, never 0,0.
 export const withDrawnRegionBounds = (regionBounds, regions) => {
   let merged = null;
+  // Test G avec Jev : la carte sautait encore sur la Hongrie. `merged` commence
+  // en copie de l'archive, et « déjà vu » se lisait dedans : la boîte juste d'un
+  // état que l'archive connaissait était sautée. On retient à part ce qu'on a posé.
+  const placed = new Set();
   for (const region of regions ?? []) {
     const id = String(region?.id ?? "");
-    if (!id || merged?.has(id)) continue;
     const box = isBounds(region?.bounds) ? region.bounds : null;
+    // Une boîte l'emporte sur un centre déjà posé pour le même état.
+    if (!id || (placed.has(id) && !box) || (placed.has(`box:${id}`))) continue;
     if (!box && regionBounds?.has?.(id)) continue;
     const bounds = box
       ?? (typeof region?.lng === "number" && typeof region?.lat === "number"
@@ -663,9 +674,27 @@ export const withDrawnRegionBounds = (regionBounds, regions) => {
     if (!bounds) continue;
     if (!merged) merged = new Map(regionBounds ?? []);
     merged.set(id, bounds);
+    placed.add(id);
+    if (box) placed.add(`box:${id}`);
   }
   return merged ?? regionBounds ?? new Map();
 };
+
+// Les événements écrits par le moteur (batailles, blocus, déclarations) sont déjà
+// dans la langue du tour : le traducteur de l'interface ne les touche pas
+// (test G avec Jev : « Białołęka » retraduit en « Białystok »).
+export const engineEventTextProps = (event) => (event?.source === "engine" ? { "data-no-translate": "" } : {});
+
+// Les états de la carte mondiale n'ont qu'un centre dans le catalogue ; leur
+// boîte se déduit du centre et de la surface (supply-<scenario>.json : lng, lat,
+// areaKm2), un carré de même aire, un peu élargi. Pur.
+export const worldMapStateRegions = (info) => Object.entries(info ?? {}).flatMap(([id, state]) => {
+  const lng = Number(state?.lng); const lat = Number(state?.lat); const area = Number(state?.areaKm2);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat) || !(area > 0)) return [];
+  const halfLat = (Math.sqrt(area) / 2 / 111) * 1.15;
+  const halfLng = halfLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  return [{ id, lng, lat, bounds: [[lng - halfLng, lat - halfLat], [lng + halfLng, lat + halfLat]] }];
+});
 
 // The merge above over the map's primed records, once per pair of tables: the
 // world a context is built against is replaced every few seconds, the tables

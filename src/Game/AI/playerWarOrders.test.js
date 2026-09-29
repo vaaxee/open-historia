@@ -51,8 +51,9 @@ test("the war the player ordered is started by the engine, tied to the order", (
 
 test("in a French game the engine announces the war in French", () => {
   const { started } = planPlayerWars({ actions: orders(), world, player: "Soviet Union", date: "1936-01-09", language: "fr" });
-  assert.equal(started[0].event.title, "Déclaration de guerre : Union soviétique contre Lituanie");
-  assert.equal(started[0].event.description, "Sur ordre de son gouvernement, Union soviétique déclare la guerre à Lituanie. À partir d'aujourd'hui, les deux pays sont en guerre.");
+  // Test G avec Jev : avec leurs articles.
+  assert.equal(started[0].event.title, "Déclaration de guerre : l'Union soviétique contre la Lituanie");
+  assert.equal(started[0].event.description, "Sur ordre de son gouvernement, l'Union soviétique déclare la guerre à la Lituanie. À partir d'aujourd'hui, les deux pays sont en guerre.");
   assert.ok(eventDeclaresWar(started[0].event), "the ledger reads it as a declaration");
 });
 
@@ -162,7 +163,7 @@ test("a war the answer started from an offensive gets its announcement, placed f
     storylineUpdates: (value) => value,
   });
   assert.equal(at, 1);
-  assert.equal(candidate.events[1].title, "Déclaration de guerre : Union soviétique contre Lituanie");
+  assert.equal(candidate.events[1].title, "Déclaration de guerre : l'Union soviétique contre la Lituanie");
   assert.deepEqual(candidate.warUpdates[0].eventIndexes, [2], "the offensive moved one down, and its record with it");
   assert.deepEqual(candidate.storylineUpdates[0].eventIndexes, [0, 2]);
 });

@@ -116,7 +116,7 @@ export const navalPanelModel = (world, player, map, seas) => {
     .filter((zone) => zone.own > 0 || zone.enemy > 0)
     .sort((a, b) => b.enemy - a.enemy || b.own - a.own || a.zoneId.localeCompare(b.zoneId))
     .slice(0, 40)
-    .map((zone) => ({ ...zone, name: label(zone.zoneId), control: control[zone.zoneId] ?? null }));
+    .map((zone) => ({ ...zone, name: label(zone.zoneId), sea: seas.zones[zone.zoneId]?.name ?? null, control: control[zone.zoneId] ?? null }));
   const coasts = Object.keys(seas.stateSeas ?? {}).filter(isEnemy)
     .map((id) => ({ id, name: map?.nameOf(id) ?? id, owner: controllerOf(id) }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -127,10 +127,13 @@ export const navalPanelModel = (world, player, map, seas) => {
     onCoast,
     zones,
     coasts,
-    missions: missions.map((mission) => ({ ...mission, name: label(mission.zoneId), control: control[mission.zoneId] ?? null })),
+    missions: missions.map((mission) => ({ ...mission, name: label(mission.zoneId), sea: seas.zones[mission.zoneId]?.name ?? null, control: control[mission.zoneId] ?? null })),
     landings: normalizeLandings(world.hoi.landings).filter((landing) => key(landing.owner) === key(owner)),
     blockades: list(world.hoi.blockades).filter((blockade) => key(blockade.owner) === key(owner)
-      || list(blockade.states).some(isOwn)).map((blockade) => ({ ...blockade, name: label(blockade.zoneId), against: key(blockade.owner) !== key(owner) })),
+      || list(blockade.states).some(isOwn)).map((blockade) => ({
+      ...blockade, name: label(blockade.zoneId), sea: seas.zones[blockade.zoneId]?.name ?? null, against: key(blockade.owner) !== key(owner),
+      stateNames: list(blockade.states).map((id) => map?.nameOf(id) ?? id),
+    })),
   };
 };
 

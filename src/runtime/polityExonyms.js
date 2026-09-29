@@ -87,6 +87,34 @@ const FRENCH_NAMES = new Map();
 for (const [french, english] of FRENCH_ROWS) if (!FRENCH_NAMES.has(english)) FRENCH_NAMES.set(english, french);
 export const frenchPolityName = (name) => FRENCH_NAMES.get(String(name ?? "").trim()) ?? String(name ?? "").trim();
 
+// Test G : « Union soviétique attaque Rovno, tenue par Pologne… de Union
+// soviétique ». Un nom de pays français prend son article : le genre vient de la
+// table ci-dessous (féminin par défaut pour un nom en -e), avec la forme demandée :
+//   "" → la Pologne, le Japon, l'Union soviétique, les États-Unis
+//   "de" → de la Pologne, du Japon, de l'Union soviétique, des États-Unis
+//   "à" → à la Pologne, au Japon, à l'Union soviétique, aux États-Unis
+// Un nom qui n'est pas un nom de pays français connu reste sans article.
+const FRENCH_MASCULINE = new Set(["Royaume-Uni", "Japon", "Empire du Japon", "Portugal", "Danemark", "Luxembourg", "Canada", "Brésil", "Chili",
+  "Pérou", "Maroc", "Liban", "Irak", "Tibet", "Népal", "Siam", "Mandchoukouo", "Mexique", "Libéria", "Afghanistan", "Reich allemand",
+  "Troisième Reich", "Touva", "Tannou-Touva", "Bahreïn"]);
+const FRENCH_PLURAL = new Set(["États-Unis", "États-Unis d'Amérique", "Pays-Bas", "Philippines", "Indes néerlandaises"]);
+const FRENCH_BARE = new Set(["URSS"]);
+const FRENCH_KNOWN = new Set(FRENCH_ROWS.map(([french]) => french));
+export const frenchWithArticle = (frenchName, form = "") => {
+  const name = String(frenchName ?? "").trim();
+  if (!FRENCH_KNOWN.has(name)) return form === "de" ? `de ${name}` : form === "à" ? `à ${name}` : name;
+  const elided = /^[aeiouyéèêàâîôûœh]/i.test(name) && !FRENCH_PLURAL.has(name);
+  if (FRENCH_BARE.has(name)) return form === "de" ? `de l'${name}` : form === "à" ? `à l'${name}` : `l'${name}`;
+  if (FRENCH_PLURAL.has(name)) return form === "de" ? `des ${name}` : form === "à" ? `aux ${name}` : `les ${name}`;
+  if (elided) return form === "de" ? `de l'${name}` : form === "à" ? `à l'${name}` : `l'${name}`;
+  if (FRENCH_MASCULINE.has(name)) return form === "de" ? `du ${name}` : form === "à" ? `au ${name}` : `le ${name}`;
+  return form === "de" ? `de la ${name}` : form === "à" ? `à la ${name}` : `la ${name}`;
+};
+// Le même, depuis le nom de la carte (« Soviet Union » → « l'Union soviétique »).
+export const frenchPolityWithArticle = (name, form = "") => frenchWithArticle(frenchPolityName(name), form);
+// En début de phrase.
+export const capitalizeFirst = (text) => String(text ?? "").replace(/^\p{L}/u, (letter) => letter.toUpperCase());
+
 // Every polity a text names, as the map's exact names: its key, display name,
 // aliases, and every foreign name of it above ("Lituanie", "Royaume-Uni").
 // Case and accents do not matter; a name must stand as a whole word.

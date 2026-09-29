@@ -110,6 +110,8 @@ export const registerWorldMapRoutes = (app) => {
         if (fs.existsSync(seas)) ({ zones = {}, stateSeas = {} } = JSON.parse(fs.readFileSync(seas, "utf8")) ?? {});
       }
     } catch { /* un fichier illisible : pas de zones de mer */ }
+    // Les lacs (zones marquées `lake` par seas.mjs) ne sont pas la mer.
+    zones = Object.fromEntries(Object.entries(zones).filter(([, zone]) => !zone?.lake));
     res.json({ zones, stateSeas });
   });
   app.get("/api/worldmap/status", (req, res) => {

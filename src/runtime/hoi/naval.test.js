@@ -174,7 +174,7 @@ test("a naval battle: the stronger side holds the zone, both lose ships, and its
   // The sheet and the event, in French.
   const event = navalBattleEvent(battle, { language: "fr", nameOf: (name) => ({ "Soviet Union": "Union soviétique", Lithuania: "Lituanie" })[name] ?? name });
   assert.equal(event.title, "Combat naval au large de Memel");
-  assert.match(event.description, /Navires perdus : [\d.]+ pour Union soviétique, [\d.]+ pour Lituanie\. Union soviétique garde la maîtrise de la zone\./);
+  assert.match(event.description, /^Les flottes de l'Union soviétique \(3\) et de la Lituanie \(1\) s'affrontent au large de Memel\. Navires perdus : [\d.]+ pour l'Union soviétique, [\d.]+ pour la Lituanie\. L'Union soviétique garde la maîtrise de la zone\.$/);
   assert.match(describeNaval(naval), /BLOCKADE by Soviet Union in sea zone 20001: 1 enemy coastal state/);
 });
 

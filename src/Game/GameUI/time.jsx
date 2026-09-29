@@ -40,8 +40,11 @@ import {
     deriveEventFocusBounds,
     deriveEventLinks,
     mergeFeatureParts,
+    engineEventTextProps,
     tileGeometryParts,
+    worldMapStateRegions,
 } from "./eventFocus.js";
+import { loadWorldMapSupply } from "../../runtime/worldmap/supplyData.js";
 import { setWorldStateOverride } from "../Map/useWorldState.js";
 import { getUnitById, setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -850,6 +853,10 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     const heldAbove = typeof onToggleMapChanges === "function";
     const showMapChanges = heldAbove ? Boolean(openMapChanges) : ownMapChanges;
     const toggleMapChanges = () => (heldAbove ? onToggleMapChanges() : setOwnMapChanges((open) => !open));
+    // Test G : le traducteur de l'interface retraduisait le titre d'une bataille
+    // du moteur, déjà dans la langue du tour, et « Białołęka » devenait
+    // « Białystok ». Les textes du moteur ne passent plus par lui.
+    const engineText = engineEventTextProps(event);
 
     return (
         <div
@@ -910,12 +917,12 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             </div>
         )}
 
-        <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        <div {...engineText} style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
         {event.title}
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            <div {...engineText} className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
             <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
             </div>
         )}
@@ -2914,9 +2921,25 @@ const DateWidget = ({
         return () => window.removeEventListener("oh:region-catalog-primed", bump);
     }, []);
 
+    // Test G avec Jev : la caméra sautait sur la Hongrie. Sur la carte mondiale,
+    // chaque état a sa boîte, tirée de son centre et de sa surface.
+    const [worldMapRegions, setWorldMapRegions] = useState(null);
+    useEffect(() => {
+        let alive = true;
+        loadWorldMapSupply().then((info) => {
+            if (alive && info && Object.keys(info).length) setWorldMapRegions(worldMapStateRegions(info));
+        }).catch(() => {});
+        return () => { alive = false; };
+    }, [primedRegionsVersion]);
+    const drawnWithWorldMap = useMemo(() => {
+        const primed = getPrimedScenarioRegionCatalog();
+        return worldMapRegions ? [...(primed ?? []), ...worldMapRegions] : primed;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [worldMapRegions, primedRegionsVersion]);
+
     const currentFocusContext = useCallback(() => {
         const world = focusWorldRef.current;
-        const drawn = getPrimedScenarioRegionCatalog();
+        const drawn = drawnWithWorldMap;
         const cached = focusContextRef.current;
         if (cached.catalog !== focusCatalog || cached.world !== world || cached.drawn !== drawn || !cached.context) {
             focusContextRef.current = {
@@ -2929,7 +2952,7 @@ const DateWidget = ({
         return focusContextRef.current.context;
         // primedRegionsVersion is not read: it is what makes the cards ask again.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [focusCatalog, primedRegionsVersion]);
+    }, [focusCatalog, primedRegionsVersion, drawnWithWorldMap]);
 
     // What each event is about, as chips on its card that fly the map there
     // (eventFocus.js deriveEventLinks). Re-derived once the map data has loaded,

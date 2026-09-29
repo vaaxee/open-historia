@@ -127,10 +127,15 @@ test("on a drawn map, with no stock outlines at all, regions and polities are fr
   assert.equal(deriveEventLinks({ title: "Nowhere" }, drawn).length, 0, "a region without a centre is not placed at 0,0");
 });
 
-test("the map's own records frame a drawn region by its box, and the stock outline still wins where there is one", () => {
+// Test G, then test G with Jev: the drawn map's own box wins (the archive predates
+// the world map's re-alignment, and Rivne was framed in Hungary); the stock
+// outline wins only over a bare centre. (This test used to expect the archive to
+// win over a box, and passed only through a bug that skipped every drawn box of a
+// region the archive knew.)
+test("the map's own records frame a drawn region by its box; the stock outline wins only over a bare centre", () => {
   const drawn = [
     { id: "r-9", name: "Southmarch", bounds: [[20, 40], [22, 41]], lng: 21, lat: 40.5 },
-    { id: "UKR.5_1", name: "Donetsk", bounds: [[0, 0], [1, 1]] },
+    { id: "UKR.5_1", name: "Donetsk", lng: 0.5, lat: 0.5 },
   ];
   const withDrawn = buildFocusContext({
     countries: COUNTRIES,

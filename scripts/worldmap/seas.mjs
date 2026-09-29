@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import zlib from "node:zlib";
+import { seaAt } from "../../src/runtime/worldmap/seaNames.js";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const DATA = process.env.OH_DATA_DIR || path.join(here, "..", "..", "server", "data");
@@ -126,6 +127,48 @@ export const buildSeaZones = ({ grid, width, height, step = 0.1, latTop = 84, st
   return { zones, cellZone, kept };
 };
 
+// Test G avec Jev : des lacs et des réservoirs (Baïkal, Rybinsk…) passaient pour
+// la mer, et les zones portaient le nom d'un état côtier. Chaque zone reçoit le
+// nom de sa mer (seaNames.js) ; les zones reliées entre elles forment des
+// étendues d'eau ; la plus grande est l'océan mondial, une autre n'est gardée que
+// si c'est une mer fermée connue (mer Noire, Caspienne…) assez grande. Le reste
+// est marqué `lake` (les identifiants ne changent pas). Pur.
+export const classifySeaZones = (zones) => {
+  const ids = Object.keys(zones);
+  const component = new Map();
+  const groups = [];
+  for (const id of ids) {
+    if (component.has(id)) continue;
+    const group = [];
+    const stack = [id];
+    component.set(id, groups.length);
+    while (stack.length) {
+      const current = stack.pop();
+      group.push(current);
+      for (const next of zones[current]?.neighbours ?? []) {
+        const key = String(next);
+        if (zones[key] && !component.has(key)) { component.set(key, groups.length); stack.push(key); }
+      }
+    }
+    groups.push(group);
+  }
+  const cellsOf = (group) => group.reduce((sum, id) => sum + (zones[id].cells ?? 0), 0);
+  const ocean = groups.reduce((best, group, index) => (cellsOf(group) > cellsOf(groups[best] ?? []) ? index : best), 0);
+  const out = {};
+  groups.forEach((group, index) => {
+    const cells = cellsOf(group);
+    // Une étendue séparée est une mer si l'une de ses zones tombe dans une mer
+    // fermée connue, et qu'elle en a la taille.
+    const enclosed = group.map((id) => seaAt(...zones[id].center)).find((sea) => sea.enclosed && cells >= sea.minCells);
+    for (const id of group) {
+      const sea = seaAt(...zones[id].center);
+      const lake = index !== ocean && !enclosed;
+      out[id] = { ...zones[id], name: { fr: sea.fr, en: sea.en }, sea: sea.id, ...(lake ? { lake: true } : {}) };
+    }
+  });
+  return out;
+};
+
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === url.fileURLToPath(import.meta.url);
 if (isMain) {
   const meta = readJson(path.join(V1, "meta.json"));
@@ -134,10 +177,15 @@ if (isMain) {
   const grid = new Uint16Array(bytes.buffer, bytes.byteOffset, width * height);
   const scenario = readJson(path.join(DATA, "scenarios", scenarioId, "provinces.v1.json"));
   const started = Date.now();
-  const { zones } = buildSeaZones({ grid, width, height, step, latTop, stateOf: (province) => scenario.states?.[province - 1] ?? "" });
+  const built = buildSeaZones({ grid, width, height, step, latTop, stateOf: (province) => scenario.states?.[province - 1] ?? "" });
+  const zones = classifySeaZones(built.zones);
   const stateSeas = {};
-  for (const [id, zone] of Object.entries(zones)) for (const state of zone.coastalStates) (stateSeas[state] ??= []).push(Number(id));
-  const file = path.join(V1, `seas-${scenarioId}.json`);
+  // Les rives d'un lac ne sont pas des côtes.
+  for (const [id, zone] of Object.entries(zones)) if (!zone.lake) for (const state of zone.coastalStates) (stateSeas[state] ??= []).push(Number(id));
+  const lakes = Object.values(zones).filter((zone) => zone.lake);
+  console.log(`${lakes.length} zones de lacs écartées (${lakes.reduce((sum, zone) => sum + zone.cells, 0)} cases)`);
+  // OH_SEAS_OUT : écrire ailleurs (un essai sans toucher aux données servies).
+  const file = process.env.OH_SEAS_OUT || path.join(V1, `seas-${scenarioId}.json`);
   fs.writeFileSync(file, JSON.stringify({ version: 1, scenarioId, generatedAt: new Date().toISOString(), tuning: SEA_TUNING, zones, stateSeas }));
   const coastal = Object.values(zones).filter((zone) => zone.coastalStates.length).length;
   console.log(`${file}: ${Object.keys(zones).length} zones de mer (${coastal} côtières), ${Object.keys(stateSeas).length} états côtiers, en ${Date.now() - started} ms`);

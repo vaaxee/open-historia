@@ -29,6 +29,7 @@ import { divisionStrength, templatesFor } from "./armies.js";
 import { airLosses, frontAir } from "./air.js";
 import { frontLine, normalizeFronts } from "./fronts.js";
 import { placeNameFor } from "../worldmap/placeNames.js";
+import { capitalizeFirst, frenchWithArticle } from "../polityExonyms.js";
 
 export const COMBAT_TUNING = Object.freeze({
   // Attaque et défense de base par gabarit terrestre.
@@ -75,7 +76,23 @@ export const COMBAT_TUNING = Object.freeze({
   surrenderAfterDays: 30,
   // Prises au plus par front et par semaine (comme warRules : OCCUPATIONS_PER_WEEK).
   capturesPerWeek: 3,
+  // Test G avec Jev : 34 divisions en percée ont pris Rovno, Białołęka et
+  // Varsovie en une semaine de janvier (300 km, marais, hiver). L'avance d'un
+  // front se compte maintenant en points par semaine, selon sa posture, réduits
+  // par la saison ; une prise coûte selon le terrain de l'état pris, et le front
+  // prend tant qu'il lui reste des points (au moins une prise s'il en a). Une
+  // prise est toujours un état au contact de la ligne de départ du tour.
+  advancePerWeek: Object.freeze({ attack: 2, breakthrough: 3 }),
+  advanceWeather: Object.freeze({ winter: 0.5, mud: 0.6 }),
+  captureCost: Object.freeze({ plaine: 1, desert: 1, foret: 1.5, colline: 1.5, marais: 1.5, jungle: 1.5, urbain: 1.5, montagne: 2 }),
 });
+
+// Les points d'avance d'un front pour un saut : posture, durée, saison.
+export const advanceAllowance = ({ posture = "attack", days = 7, weather = "" } = {}) => {
+  const T = COMBAT_TUNING;
+  const weeks = Math.max(1 / 7, num(days, 7) / 7);
+  return round2((T.advancePerWeek[posture] ?? T.advancePerWeek.attack) * weeks * (T.advanceWeather[weather] ?? 1));
+};
 
 const clean = (value) => String(value ?? "").trim();
 const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -133,8 +150,10 @@ export const divisionPower = (division, templates, role = "attack", terrain = ""
 //   date, days, seed, fortAt(stateId) → niveau de fort
 //   seaSupport(zoneId, owner) → appui naval d'un débarquement (naval.js), 0 → 0,4
 //   landingBlocked(landing) → l'ennemi domine désormais la zone du débarquement
+//   capitalOf(polity) → id de l'état capitale (une capitale défendue ne tombe
+//   pas à son premier combat)
 // Renvoie { battles, captures, outcome, surrenders, intercepted }.
-export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polity) => [polity], date = "", days = 7, seed = "", fortAt = () => 0, seaSupport = () => 0, landingBlocked = () => false } = {}) => {
+export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polity) => [polity], date = "", days = 7, seed = "", fortAt = () => 0, seaSupport = () => 0, landingBlocked = () => false, capitalOf = () => "" } = {}) => {
   const T = COMBAT_TUNING;
   const hoi = world?.hoi ?? {};
   const templates = templatesFor(hoi.series);
@@ -150,15 +169,19 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
   for (const [owner, army] of Object.entries(armies)) for (const division of list(army?.divisions)) byId.set(division.id, { owner, division });
   const change = (id) => (outcome[id] ??= { loss: 0, organisation: 0, morale: 0, experience: 0, stateId: "", removed: false });
   const weeks = Math.max(1 / 7, num(days, 7) / 7);
-  const allowance = Math.max(1, Math.ceil(T.capturesPerWeek * weeks));
   // Une escadre ne perd ses avions qu'une fois par saut, au pire de ses combats.
   const airLoss = (id, loss) => { const entry = change(id); entry.loss = Math.max(entry.loss, loss); };
 
+  // Les états déjà disputés aux tours précédents (une capitale défendue ne tombe
+  // pas au premier).
+  const foughtBefore = new Set(list(hoi.battleLog).map((battle) => clean(battle?.stateId)));
+
   // Les batailles d'un front (ou d'un débarquement : `landing`, avec son appui naval).
-  const engage = (front, { landing = null } = {}) => {
-    const cap = landing ? 1 : allowance;
+  // `points` : l'avance du front pour ce saut (advanceAllowance).
+  const engage = (front, { landing = null, points = 1 } = {}) => {
     const enemySide = new Set(sideOf(front.enemy).map(key));
-    const state = { captured: 0 };
+    const state = { captured: 0, spent: 0, points: landing ? 1 : points };
+    const canAdvance = () => (landing ? state.captured < 1 : state.spent < state.points);
     // Où se tient une division maintenant : après un repli de ce tour, là où elle s'est repliée.
     const defendersIn = (target) => [...byId.values()].filter(({ owner, division }) => (outcome[division.id]?.stateId || division.stateId) === target
       && enemySide.has(key(owner)) && T.stats[division.template] && !outcome[division.id]?.removed);
@@ -202,9 +225,12 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       const attack = round2(attackBase * factors.posture * factors.weather * factors.air * factors.dice * (factors.fatigue ?? 1) * (factors.landing ?? 1));
       const defense = round2(defenseBase * factors.terrain * factors.river * factors.fort * factors.hold * (factors.bombing ?? 1));
       const ratio = defense > 0 ? round2(attack / defense) : 99;
-      const canTake = state.captured < cap;
+      const canTake = canAdvance();
+      // Une capitale défendue tient au moins un tour : elle ne tombe pas à son premier combat.
+      const capitalHolds = defenders.length > 0 && target === clean(capitalOf(front.enemy)) && !foughtBefore.has(target);
       // Une tête de pont qui ne prend pas est rembarquée : pas de combat indécis.
-      const result = ratio >= T.captureRatio && canTake ? "captured" : ratio >= T.repelRatio && !landing ? "stalemate" : "repelled";
+      const result = ratio >= T.captureRatio && canTake && !capitalHolds ? "captured" : ratio >= T.repelRatio && !landing ? "stalemate" : "repelled";
+      if (capitalHolds) factors.capitalHolds = true;
 
       // Les pertes suivent le rapport de forces : l'attaquant d'une résistance
       // écrasée ne perd presque rien (test G : 3 000 hommes contre une garnison
@@ -245,6 +271,7 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       if (result === "captured") {
         taken.add(target);
         state.captured += 1;
+        state.spent += T.captureCost[terrain] ?? 1;
         captures.push({ stateId: target, stateName: map.nameOf?.(target) ?? target, from: map.controllerOf(target), to: front.owner, frontId: front.id });
       }
       const count = (entries) => {
@@ -299,28 +326,26 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       && T.stats[entry.division.template] && !outcome[entry.division.id]?.removed);
     if (!attackers.length || !line.enemy.length) continue;
     const ordered = [...new Set([...(front.axis && line.enemy.includes(front.axis) ? [front.axis] : []), ...line.enemy])].filter((id) => !taken.has(id));
-    const targets = front.posture === "breakthrough" ? ordered.slice(0, 1) : ordered.slice(0, Math.min(allowance, attackers.length));
-    const { fight, defendersIn, enemySide, state } = engage(front);
+    // L'avance du front pour ce saut, selon sa posture et la saison sur l'axe.
+    const points = advanceAllowance({ posture: front.posture, days, weather: weatherAt(date, map.latOf?.(ordered[0])) });
+    const targets = front.posture === "breakthrough" ? ordered.slice(0, 1) : ordered.slice(0, Math.min(Math.max(1, Math.ceil(points)), attackers.length));
+    const { fight, defendersIn, state } = engage(front, { points });
+    const originsOf = (target) => line.pairs.filter(([, to]) => to === target).map(([from]) => from);
 
     if (front.posture === "breakthrough") {
-      // La percée : l'axe d'abord, puis, tant qu'elle passe et que le plafond le
-      // permet, l'état ennemi suivant derrière celui qu'elle vient de prendre
-      // (le moins défendu), avec toutes les divisions du front.
+      // La percée : l'axe d'abord, puis, tant qu'il reste de l'avance, l'état
+      // voisin sur la même ligne de départ (elle élargit la brèche, sans
+      // s'enfoncer au-delà de ce qui touchait la ligne en début de tour), le
+      // moins défendu, avec toutes les divisions du front.
       let target = ordered[0];
-      let origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
       let step = 0;
-      while (target && state.captured < allowance) {
-        if (fight(target, attackers, origins, step) !== "captured") break;
+      while (target && state.spent < state.points) {
+        if (fight(target, attackers, originsOf(target), step) !== "captured") break;
         step += 1;
-        const last = target;
-        const nextTo = new Set(list(map.neighboursOf(last)));
-        const reach = new Set([...line.enemy, ...[...taken].flatMap((id) => list(map.neighboursOf(id)))]);
-        const next = [...reach]
-          .filter((id) => enemySide.has(key(map.controllerOf(id))) && !taken.has(id))
-          .sort((a, b) => Number(!nextTo.has(a)) - Number(!nextTo.has(b)) || defendersIn(a).length - defendersIn(b).length || a.localeCompare(b));
-        target = next[0];
-        origins = target ? [...taken].filter((id) => list(map.neighboursOf(id)).includes(target)) : [];
-        if (target && !origins.length) origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
+        const nextTo = new Set(list(map.neighboursOf(target)));
+        target = line.enemy
+          .filter((id) => !taken.has(id))
+          .sort((a, b) => Number(!nextTo.has(a)) - Number(!nextTo.has(b)) || defendersIn(a).length - defendersIn(b).length || a.localeCompare(b))[0];
       }
     } else {
       targets.forEach((target, index) => {
@@ -441,6 +466,8 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
   const words = RESULT_WORDS[fr ? "fr" : "en"];
   const attacker = nameOf(battle.attacker);
   const defender = nameOf(battle.defender);
+  // Test G : les articles (« l'Union soviétique attaque Rovno, tenue par la Pologne »).
+  const the = (name, form = "") => (fr ? frenchWithArticle(name, form) : name);
   // Les lieux dans la langue du tour (test G : « Warsaw » dans un récit français).
   const place = placeNameFor(battle.stateName, fr ? "fr" : "en");
   const retreatTo = placeNameFor(battle.retreatTo, fr ? "fr" : "en");
@@ -449,24 +476,24 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
     : fr ? `Bataille de ${place} : ${words[battle.result]}` : `Battle of ${place}: ${words[battle.result]}`;
   const sides = battle.landing
     ? (fr
-      ? `${attacker} débarque à ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
+      ? `${capitalizeFirst(the(attacker))} débarque à ${place}, tenue par ${the(defender)}${battle.garrison ? " (garnison seule)" : ""}.`
       : `${attacker} lands at ${place}, held by ${defender}${battle.garrison ? " (garrison only)" : ""}.`)
     : fr
-      ? `${attacker} attaque ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
+      ? `${capitalizeFirst(the(attacker))} attaque ${place}, tenue par ${the(defender)}${battle.garrison ? " (garnison seule)" : ""}.`
       : `${attacker} attacks ${place}, held by ${defender}${battle.garrison ? " (garrison only)" : ""}.`;
   const losses = fr
-    ? `Pertes : ${battle.losses.attacker.toLocaleString("fr-FR")} hommes pour ${attacker}, ${battle.losses.defender.toLocaleString("fr-FR")} pour ${defender}.`
+    ? `Pertes : ${battle.losses.attacker.toLocaleString("fr-FR")} hommes pour ${the(attacker)}, ${battle.losses.defender.toLocaleString("fr-FR")} pour ${the(defender)}.`
     : `Losses: ${battle.losses.attacker.toLocaleString("en-US")} men for ${attacker}, ${battle.losses.defender.toLocaleString("en-US")} for ${defender}.`;
   const garrison = battle.garrisonTaken
     ? (fr ? ` ; la garnison (${battle.garrisonTaken.toLocaleString("fr-FR")} hommes) est tuée ou capturée` : `; its garrison (${battle.garrisonTaken.toLocaleString("en-US")} men) is killed or captured`)
     : "";
   const end = battle.result === "captured"
     ? (fr
-      ? `${place} passe sous le contrôle de ${attacker}${retreatTo ? ` ; les défenseurs se replient sur ${retreatTo}` : battle.surrendered ? ` ; ${battle.surrendered} division(s) sans issue se rendent` : garrison}.`
+      ? `${place} passe sous le contrôle ${the(attacker, "de")}${retreatTo ? ` ; les défenseurs se replient sur ${retreatTo}` : battle.surrendered ? ` ; ${battle.surrendered} division(s) sans issue se rendent` : garrison}.`
       : `${place} falls under ${attacker}'s control${retreatTo ? `; the defenders fall back on ${retreatTo}` : battle.surrendered ? `; ${battle.surrendered} trapped division(s) surrender` : garrison}.`)
     : battle.result === "repelled"
-      ? (fr ? `L'attaque est repoussée ; ${place} reste à ${defender}.` : `The attack is thrown back; ${place} stays with ${defender}.`)
-      : (fr ? `Les combats restent indécis ; ${place} reste à ${defender}.` : `The fighting is indecisive; ${place} stays with ${defender}.`);
+      ? (fr ? `L'attaque est repoussée ; ${place} reste ${the(defender, "à")}.` : `The attack is thrown back; ${place} stays with ${defender}.`)
+      : (fr ? `Les combats restent indécis ; ${place} reste ${the(defender, "à")}.` : `The fighting is indecisive; ${place} stays with ${defender}.`);
   return {
     date: battle.date,
     title,

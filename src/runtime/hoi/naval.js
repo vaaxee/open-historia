@@ -29,6 +29,7 @@
 import { divisionStrength, templatesFor } from "./armies.js";
 import { seededRandom } from "./combat.js";
 import { placeNameFor } from "../worldmap/placeNames.js";
+import { capitalizeFirst, frenchWithArticle } from "../polityExonyms.js";
 
 export const NAVAL_MISSIONS = Object.freeze(["escort", "blockade", "support"]);
 export const NAVAL_TUNING = Object.freeze({
@@ -319,7 +320,7 @@ export const navalBattleEvent = (battle, { language = "en", nameOf = (name) => n
   const sunk = (value) => Math.round(num(value) * 10) / 10;
   const title = fr ? `Combat naval ${where}` : `Naval battle ${where}`;
   const description = fr
-    ? `Les flottes de ${a} (${battle.fleets.a}) et de ${b} (${battle.fleets.b}) s'affrontent ${where}. Navires perdus : ${sunk(battle.sunk.attacker)} pour ${a}, ${sunk(battle.sunk.defender)} pour ${b}. ${winner ? `${winner} garde la maîtrise de la zone.` : "La zone reste disputée."}`
+    ? `Les flottes ${frenchWithArticle(a, "de")} (${battle.fleets.a}) et ${frenchWithArticle(b, "de")} (${battle.fleets.b}) s'affrontent ${where}. Navires perdus : ${sunk(battle.sunk.attacker)} pour ${frenchWithArticle(a)}, ${sunk(battle.sunk.defender)} pour ${frenchWithArticle(b)}. ${winner ? `${capitalizeFirst(frenchWithArticle(winner))} garde la maîtrise de la zone.` : "La zone reste disputée."}`
     : `The fleets of ${a} (${battle.fleets.a}) and ${b} (${battle.fleets.b}) clash ${where}. Ships lost: ${sunk(battle.sunk.attacker)} for ${a}, ${sunk(battle.sunk.defender)} for ${b}. ${winner ? `${winner} holds the zone.` : "The zone stays contested."}`;
   return {
     date: battle.date, title, description, kind: "military", importance: "normal", notable: false, source: "engine",

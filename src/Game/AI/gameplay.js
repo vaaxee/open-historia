@@ -99,7 +99,7 @@ import {
   HOI_TECH_TREE_TOOL,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
-import { canonicalizePayloadPolityNames, frenchPolityName, mentionedPolities } from "../../runtime/polityExonyms.js";
+import { canonicalizePayloadPolityNames, capitalizeFirst, frenchPolityName, frenchPolityWithArticle, mentionedPolities } from "../../runtime/polityExonyms.js";
 import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/worldmap/unitEntry.js";
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt } from "./claimHolderCheck.js";
@@ -5948,8 +5948,17 @@ const addPlayerWars = (candidate, bundle, { date = "", receipt = null } = {}) =>
     language,
   });
   // The answer announced the war itself: that war is the player's, and protected.
-  for (const { id } of announced ?? []) {
-    const record = decodeWarUpdates(candidate.warUpdates).find((entry) => entry.id === id);
+  for (const { id, index } of announced ?? []) {
+    let record = decodeWarUpdates(candidate.warUpdates).find((entry) => entry.id === id);
+    // The declaration told in another event than the war record's: the record
+    // moves onto it (planPlayerWars), and no second declaration is added.
+    if (record && Number.isInteger(index)) {
+      const announcer = candidate.events[index];
+      record = { ...record, eventIndexes: [index, ...normalizeArray(record.eventIndexes).filter((entry) => entry !== index)], eventIds: [normalizeString(announcer?.id), ...normalizeArray(record.eventIds)].filter(Boolean) };
+      candidate.warUpdates = decodeWarUpdates(candidate.warUpdates).map((entry) => (entry.id === id ? record : entry));
+      if (announcer && typeof announcer === "object") announcer.warId = id;
+      noteReceipt(receipt, "adjusted", `The answer started the war ${id} on one event and told the declaration in "${normalizeString(announcer?.title)}"; that event announces the war, and the engine adds no second declaration.`);
+    }
     const event = candidate.events[normalizeArray(record?.eventIndexes)[0]];
     if (record && event) protectPlayerWar(candidate, { record, event: { ...event, warId: id }, eventId: normalizeString(event.id), title: normalizeString(event.title) });
   }
@@ -6202,6 +6211,8 @@ const resolveCombatForJump = async (bundle, { originDate = "", days = 7, orders 
       fortAt: (id) => forts.get(id) ?? 0,
       seaSupport: (zoneId, owner) => landingSupport(world, zoneId, owner, naval.control, warOf),
       landingBlocked: (landing) => enemyDominates(naval.control, landing.zoneId, landing.owner, warOf),
+      // Test G : Varsovie tombait à son premier combat ; une capitale défendue tient un tour.
+      capitalOf: (polity) => normalizeString(context.capitals?.[polity]?.state),
     });
     if (!combat.battles.length && !combat.surrenders.length && !combat.intercepted.length && !naval.battles.length
       && !naval.blockades.length && !Object.keys(combat.outcome).length && !Object.keys(naval.control).length) return null;
@@ -6215,6 +6226,7 @@ const resolveCombatForJump = async (bundle, { originDate = "", days = 7, orders 
       navalMissions: normalizeArray(world.hoi.navalMissions),
       date,
       names: Object.fromEntries(map.states.map((id) => [id, map.nameOf(id)])),
+      controllers: Object.fromEntries(naval.blockades.flatMap((blockade) => blockade.states).map((id) => [id, map.controllerOf(id)])),
     };
   } catch (error) {
     console.warn("[combat] the battles could not be resolved this turn.", error);
@@ -6238,14 +6250,32 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
   for (const battle of normalizeArray(combat.naval?.battles)) {
     events.push({ ...navalBattleEvent(battle, { language, nameOf }), warId: warIdFor(battle.attacker, battle.defender) });
   }
+  const the = (name, form = "") => (language === "fr" ? frenchPolityWithArticle(name, form) : name);
   for (const entry of normalizeArray(combat.intercepted)) {
     events.push({
       date: combat.date,
       title: language === "fr" ? `Débarquement intercepté au large de ${placeNameFor(entry.stateName, "fr")}` : `Landing intercepted off ${entry.stateName}`,
       description: language === "fr"
-        ? `La flotte de ${nameOf(entry.enemy)} tient désormais la mer : le convoi de ${nameOf(entry.owner)} (${entry.divisions} division(s)) doit rentrer au port, avec des pertes.`
+        ? `La flotte ${the(entry.enemy, "de")} tient désormais la mer : le convoi ${the(entry.owner, "de")} (${entry.divisions} division(s)) doit rentrer au port, avec des pertes.`
         : `${entry.enemy}'s fleet now holds the sea: ${entry.owner}'s convoy (${entry.divisions} division(s)) turns back to port, with losses.`,
       kind: "military", importance: "normal", notable: false, source: "engine", impacts: {}, warId: warIdFor(entry.owner, entry.enemy),
+    });
+  }
+  // Test G : le blocus de Gdynia a joué sans que rien ne le dise. Un blocus qui
+  // commence a son événement ; celui qui dure se lit dans l'onglet Mer.
+  const already = new Set(normalizeArray(world?.hoi?.blockades).map((blockade) => `${blockade.owner}|${blockade.zoneId}`));
+  for (const blockade of normalizeArray(combat.naval?.blockades)) {
+    if (already.has(`${blockade.owner}|${blockade.zoneId}`)) continue;
+    const places = normalizeArray(blockade.states).map((id) => placeNameFor(combat.names?.[id] || id, language)).join(", ");
+    const holders = [...new Set(normalizeArray(blockade.states).map((id) => normalizeString(combat.controllers?.[id])).filter(Boolean))];
+    events.push({
+      date: combat.date,
+      title: language === "fr" ? `Blocus de ${places}` : `Blockade of ${places}`,
+      description: language === "fr"
+        ? `La flotte ${the(blockade.owner, "de")} tient la mer au large de ${places} : ${places} ne reçoit plus rien par mer, et les divisions qui en dépendent se ravitaillent par la terre.`
+        : `${blockade.owner}'s fleet holds the sea off ${places}: nothing reaches ${places} by sea any more, and the divisions it fed are supplied overland.`,
+      kind: "military", importance: "normal", notable: true, source: "engine", impacts: {},
+      warId: holders[0] ? warIdFor(blockade.owner, holders[0]) : "",
     });
   }
   const pockets = {};
@@ -6254,9 +6284,9 @@ const addEngineBattles = (candidate, combat, { world = {}, receipt = null } = {}
     const place = combat.names?.[list[0].stateId] || list[0].stateId;
     events.push({
       date: combat.date,
-      title: language === "fr" ? `${nameOf(owner)} : reddition de ${list.length} division(s) encerclée(s)` : `${owner}: ${list.length} encircled division(s) surrender`,
+      title: language === "fr" ? `${capitalizeFirst(the(owner))} : reddition de ${list.length} division(s) encerclée(s)` : `${owner}: ${list.length} encircled division(s) surrender`,
       description: language === "fr"
-        ? `Coupées de tout ravitaillement depuis plus d'un mois et sans organisation, ${list.length} division(s) de ${nameOf(owner)} se rendent près de ${place}.`
+        ? `Coupées de tout ravitaillement depuis plus d'un mois et sans organisation, ${list.length} division(s) ${the(owner, "de")} se rendent près de ${place}.`
         : `Cut off from supply for over a month and without organisation, ${list.length} division(s) of ${owner} surrender near ${place}.`,
       kind: "military", importance: "major", notable: true, source: "engine", impacts: {},
     });
