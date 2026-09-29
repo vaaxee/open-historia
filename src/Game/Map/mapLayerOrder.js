@@ -42,6 +42,8 @@ export const MAP_LAYER_ORDER = [
   // aplats politiques translucides, le relief ombré par-dessus.
   "worldmap-coast-halo",
   "worldmap-terrain",
+  // La texture Natural Earth II, sur les aplats de terrain, sous la couleur des pays.
+  "worldmap-texture",
   "worldmap-fill",
   "worldmap-relief",
   // Occupied states, hatched in their lawful sovereign's colour over the occupier's.

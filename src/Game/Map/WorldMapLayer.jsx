@@ -37,7 +37,8 @@ import { getFrontDraw, toggleFrontDrawState } from "./frontDrawStore.js";
 import { brushProvince, getBrush, useBrush } from "./brushStore.js";
 import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 import { adjacencyFromArcs, classifyOwnerChanges, desaturate, easeAt, onScreen, spreadOrder } from "./motion/motionPlan.js";
-import { animate, currentTimings } from "./motion/motionEngine.js";
+import { animate, currentTimings, motionLevel } from "./motion/motionEngine.js";
+import { TEXTURE_MAX_ZOOM, textureLayerSpec } from "./textureLayer.js";
 import { stateOutlineLines, stampCapitulation } from "./motion/motionOverlays.js";
 
 export { worldMapPreviewMode };
@@ -94,6 +95,14 @@ const WorldMapLayer = () => {
   const [statesGeojson, setStatesGeojson] = useState(null);
   const [annexLines, setAnnexLines] = useState(EMPTY_COLLECTION);
   const applied = useRef({ owners: null, sovereign: null, source: null, capitulated: null });
+  // La texture suit le réglage Animations (textureLayer.js), relu à chaque changement.
+  const [motion, setMotion] = useState(motionLevel);
+  useEffect(() => {
+    const update = () => setMotion(motionLevel());
+    window.addEventListener("mapSettings:updated", update);
+    return () => window.removeEventListener("mapSettings:updated", update);
+  }, []);
+  const texture = useMemo(() => textureLayerSpec(motion), [motion]);
   const hatchShown = useRef(new Set());
   const hatchDelay = useRef(0);
 
@@ -443,6 +452,11 @@ const WorldMapLayer = () => {
           "line-opacity": ["case", ["all", ["==", ["feature-state", "kind"], BORDER_KIND.country], ["!", ["boolean", ["feature-state", "coast"], false]]], 1, 0],
         }}
       />
+    </Source>
+    {/* La texture Natural Earth II (zooms 0 à 6, mer transparente), sous les aplats
+        politiques et le relief ; mapLayerOrder.js la place. */}
+    <Source id="worldmap-texture-source" type="raster" tiles={[`${origin}/api/worldmap/texture/{z}/{x}/{y}.png`]} tileSize={256} maxzoom={TEXTURE_MAX_ZOOM}>
+      <Layer id="worldmap-texture" type="raster" minzoom={texture.minzoom} maxzoom={texture.maxzoom} paint={texture.paint} />
     </Source>
     {/* Le relief ombré, depuis les tuiles d'altitude locales (zooms 0 à 4). */}
     <Source id="worldmap-dem" type="raster-dem" tiles={[`${origin}/api/worldmap/dem/{z}/{x}/{y}.png`]} tileSize={256} maxzoom={4} encoding="terrarium">

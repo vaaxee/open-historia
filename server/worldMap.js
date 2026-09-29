@@ -41,6 +41,7 @@ export const worldMapStatus = () => {
   };
 };
 
+export const TEXTURE_MAX_ZOOM = 6;
 const int = (value) => (/^\d{1,3}$/.test(String(value)) ? Number(value) : null);
 
 // Le fichier de la carte mondiale du scénario actif : à côté de ses régions.
@@ -121,6 +122,18 @@ export const registerWorldMapRoutes = (app) => {
     const z = int(req.params.z); const x = int(req.params.x); const y = int(req.params.y);
     if (z === null || x === null || y === null || z < 0 || z > 4) return res.status(400).end();
     const file = path.join(DATA_DIR, "hoi-elevation", "terrarium", String(z), String(x), `${y}.png`);
+    if (!fs.existsSync(file)) return res.status(204).end();
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    fs.createReadStream(file).pipe(res);
+  });
+  // Phase 9 (suite) : la texture de terrain Natural Earth II, zooms 0 à 6
+  // (hoi-texture/ne2 ; scripts/worldmap/texture-tiles.mjs). 204 pour une tuile
+  // en pleine mer ou absente : la carte garde alors ses aplats de terrain.
+  app.get("/api/worldmap/texture/:z/:x/:y.png", (req, res) => {
+    const z = int(req.params.z); const x = int(req.params.x); const y = int(req.params.y);
+    if (z === null || x === null || y === null || z < 0 || z > TEXTURE_MAX_ZOOM) return res.status(400).end();
+    const file = path.join(DATA_DIR, "hoi-texture", "ne2", String(z), String(x), `${y}.png`);
     if (!fs.existsSync(file)) return res.status(204).end();
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "public, max-age=86400");
