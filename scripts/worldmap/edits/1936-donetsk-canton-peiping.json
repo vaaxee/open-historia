@@ -1,0 +1,22 @@
+{
+  "scenario": "hoi4-states-copy-copy-2",
+  "note": "Phase 12 : Donetsk découpé (Jitomir, Poltava, Kharkiv) ; Peiping pour Hebei-Chahar, Canton pour la clique du Guangdong, avec leurs capitales.",
+  "ops": [
+    { "op": "newState", "id": "brush-zhytomyr", "name": "Zhytomyr", "owner": "Soviet Union", "aliases": ["Jitomir"] },
+    { "op": "assign", "state": "brush-zhytomyr", "provinces": [9420, 9419, 9418, 9366, 9362, 9363, 9367, 9365, 9373] },
+    { "op": "newState", "id": "brush-poltava", "name": "Poltava", "owner": "Soviet Union" },
+    { "op": "assign", "state": "brush-poltava", "provinces": [9378, 9120, 9092, 9093] },
+    { "op": "newState", "id": "brush-kharkiv", "name": "Kharkiv", "owner": "Soviet Union", "aliases": ["Kharkov"] },
+    { "op": "assign", "state": "brush-kharkiv", "provinces": [9095, 9094, 9117, 9096, 9086, 9097, 9099, 9116, 9115, 9098, 9103, 9108] },
+
+    { "op": "newState", "id": "brush-peiping", "name": "Peiping", "owner": "Hebei-Chahar", "aliases": ["Beijing", "Pékin"] },
+    { "op": "assign", "state": "brush-peiping", "provinces": [12643, 12644, 12645, 12647, 12648, 12655, 12661, 12662, 12663, 12697, 12698] },
+    { "op": "rename", "state": "imp-rgb-550055", "name": "Kalgan", "aliases": ["Zhangjiakou"] },
+    { "op": "capital", "polity": "Hebei-Chahar", "state": "brush-peiping", "province": 12663, "city": "Peiping" },
+
+    { "op": "newState", "id": "brush-canton", "name": "Canton", "owner": "Guangdong Clique", "aliases": ["Guangzhou"] },
+    { "op": "assign", "state": "brush-canton", "provinces": [11124, 12181, 12184, 12186, 12187, 12188, 12189, 12191, 12193, 12194, 12195, 12196, 12197, 12198, 12200] },
+    { "op": "rename", "state": "imp-rgb-335577", "name": "Changsha" },
+    { "op": "capital", "polity": "Guangdong Clique", "state": "brush-canton", "province": 12181, "city": "Canton" }
+  ]
+}

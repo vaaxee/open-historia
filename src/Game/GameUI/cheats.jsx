@@ -25,6 +25,8 @@ import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHi
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { isOfferableEvent } from "../../runtime/interactiveOffer.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
+import { brushDraftOps, clearBrush, setBrushMode, startBrush, stopBrush, useBrush } from "../Map/brushStore.js";
+import { useWorldMapState } from "../Map/worldMapStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
@@ -81,6 +83,7 @@ const TOOLS = [
     { id: "edit-feature", title: "Map Feature Editor", subtitle: "Inspect and edit runtime features and scenario cities", icon: "◉" },
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
+    { id: "brush", title: "State Brush", subtitle: "Paint world-map provinces into a state, create a state, set a capital — rewrites the scenario (backed up)", icon: "✎", badge: "Advanced" },
     { id: "events", title: "Event Editor", subtitle: "Search, create, and repair canonical timeline events", icon: "≡" },
     { id: "interactive-event", title: "Interactive Event", subtitle: "Play any event on the record out as a scene, the way a time skip offers one now and then", icon: "⚡" },
     { id: "history-document", title: "History Document", subtitle: "Read and edit the living history the AI is given in place of older events; the timeline keeps every event", icon: "≣" },
@@ -120,7 +123,7 @@ const TOOL_GROUPS = [
         title: "Map",
         subtitle: "Manage visible cities, landmarks, and custom map features.",
         icon: "⌖",
-        tools: ["edit-feature", "add-feature", "clear-features"],
+        tools: ["edit-feature", "add-feature", "clear-features", "brush"],
     },
 ];
 
@@ -1302,6 +1305,104 @@ const eventFilterButtonStyle = (active) => ({
 // given to every AI in the game until they are withdrawn — and beneath them, the
 // changes made by hand this round, which is exactly what the next time skip
 // will be told. Nothing here costs a request.
+// Phase 12 (étape D) — l'éditeur au pinceau : des provinces de la carte mondiale
+// peintes dans un état (existant ou neuf), une capitale posée ; le serveur
+// réécrit le scénario après une sauvegarde (server/worldMapBrush.js). La carte
+// relit le scénario au rechargement.
+const BrushEditorView = ({ meta, header, busy, status, polities, runBusy, beginClickMode, endClickMode }) => {
+    const brush = useBrush();
+    const worldMap = useWorldMapState();
+    const [target, setTarget] = useState("");
+    const [name, setName] = useState("");
+    const [owner, setOwner] = useState("");
+    const [rename, setRename] = useState("");
+    const [capitalOf, setCapitalOf] = useState("");
+    const [result, setResult] = useState(null);
+    useEffect(() => { startBrush(); return () => stopBrush(); }, []);
+    const states = useMemo(
+        () => Object.entries(worldMap?.stateNames ?? {}).map(([id, label]) => ({ id, label: `${label} — ${worldMap?.stateOwners?.[id] ?? "?"}` })).sort((a, b) => a.label.localeCompare(b.label)),
+        [worldMap?.stateNames, worldMap?.stateOwners],
+    );
+    const ops = brushDraftOps({ target, name, owner, provinces: brush.provinces, capital: brush.capital, capitalOf, rename });
+    const paint = (mode) => {
+        setBrushMode(mode);
+        beginClickMode(mode === "capital" ? "Click the capital's province" : "Click provinces to paint them (click again to remove)", () => {});
+    };
+    const send = (dryRun) => runBusy(async () => {
+        const response = await fetch("/api/worldmap/brush", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ops, dryRun }) });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        setResult({ ...body, dryRun });
+        if (!dryRun) {
+            clearBrush();
+            await noteGmChange("brush", `State brush: ${body.changed.provinces.length} province(s) repainted, ${body.changed.states.length} state(s) touched.`);
+        }
+        return dryRun ? "Preview only — nothing written." : "Saved (backup kept). Reload the map to see it.";
+    });
+
+    if (!worldMap?.active) {
+        return (
+            <>
+            {header(meta?.title, meta?.subtitle)}
+            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>This tool works on games played on the world map only.</div>
+            </>
+        );
+    }
+    return (
+        <>
+        {header(meta?.title, meta?.subtitle)}
+        <div style={{ overflowY: "auto", paddingRight: "0.15rem" }}>
+        <label style={labelStyle}>Paint into</label>
+        <select value={target} onChange={(event) => setTarget(event.target.value)} style={{ ...inputStyle, colorScheme: "dark" }}>
+            <option value="">A new state…</option>
+            {states.map((state) => <option key={state.id} value={state.id} style={{ background: "#18181b" }}>{state.label}</option>)}
+        </select>
+        {target ? (
+            <>
+            <label style={labelStyle}>Rename it (optional)</label>
+            <input value={rename} onChange={(event) => setRename(event.target.value)} placeholder={worldMap.stateNames?.[target] ?? ""} style={inputStyle} />
+            </>
+        ) : (
+            <>
+            <label style={labelStyle}>New state's name</label>
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Peiping" style={inputStyle} />
+            <label style={labelStyle}>Owner at start</label>
+            <PolitySelect polities={polities} value={owner} onChange={setOwner} />
+            </>
+        )}
+        <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.7rem" }}>
+            <button type="button" disabled={busy} onClick={() => paint("paint")} style={{ ...primaryButtonStyle, flex: 1 }}>✎ Paint provinces</button>
+            <button type="button" disabled={busy || !brush.provinces.length} onClick={clearBrush} style={buttonStyle}>Clear</button>
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", marginTop: "0.35rem" }}>
+            {brush.provinces.length} province(s) selected{brush.capital ? ` · capital province ${brush.capital}` : ""}.
+        </div>
+        <label style={labelStyle}>Capital of (optional)</label>
+        <div style={{ display: "flex", gap: "0.4rem" }}>
+            <div style={{ flex: 1 }}><PolitySelect polities={polities} value={capitalOf} onChange={setCapitalOf} placeholder="No capital change" /></div>
+            <button type="button" disabled={busy || !capitalOf} onClick={() => paint("capital")} style={buttonStyle}>⌂ Pick</button>
+        </div>
+        <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.8rem" }}>
+            <button type="button" disabled={busy || !ops.length} onClick={() => send(true)} style={{ ...buttonStyle, flex: 1 }}>Preview</button>
+            <button type="button" disabled={busy || !ops.length} onClick={() => send(false)} style={{ ...primaryButtonStyle, flex: 1 }}>Save to scenario</button>
+        </div>
+        {result && (
+            <div style={{ ...editorFieldStyle, fontSize: "0.72rem", marginTop: "0.6rem" }}>
+                {result.notes.map((note, index) => (
+                    <div key={index} style={{ color: note.kind === "dropped" ? "#fca5a5" : "rgba(255,255,255,0.75)" }}>{note.text.replace(/^brush — /, "")}</div>
+                ))}
+                {result.backup && <div style={{ color: "rgba(255,255,255,0.45)", marginTop: "0.3rem" }}>Backup: {result.backup}</div>}
+                {!result.dryRun && result.backup && (
+                    <button type="button" onClick={() => window.location.reload()} style={{ ...buttonStyle, marginTop: "0.45rem", width: "100%" }}>Reload the map</button>
+                )}
+            </div>
+        )}
+        {status && <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>{status}</div>}
+        </div>
+        </>
+    );
+};
+
 const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
     const [world, setWorld] = useState(null);
     const [draft, setDraft] = useState("");
@@ -2499,6 +2600,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 game={game}
                 runBusy={runBusy}
                 closePanel={closePanel}
+            />
+        );
+    }
+
+    if (tool === "brush") {
+        return (
+            <BrushEditorView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                polities={polities}
+                runBusy={runBusy}
+                beginClickMode={beginClickMode}
+                endClickMode={endClickMode}
             />
         );
     }

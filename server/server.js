@@ -47,6 +47,7 @@ import { activeGameWorldMapFile, registerWorldMapRoutes } from "./worldMap.js";
 import { ensureStatesGeojson } from "./worldMapStates.js";
 import { registerWorldMapSurfaceRoutes } from "./worldMapSurfaces.js";
 import { registerJevRoutes } from "./jevProxy.js";
+import { registerWorldMapBrushRoutes } from "./worldMapBrush.js";
 import {
   createMapEditorDocument,
   deleteMapEditorDocument,
@@ -787,6 +788,8 @@ registerWorldMapRoutes(app);
 registerWorldMapSurfaceRoutes(app, jsonParser);
 // Phase 7.9 : le relais vers Jev, le décideur local (server/jevProxy.js).
 registerJevRoutes(app, jsonParser);
+// Phase 12 : l'éditeur au pinceau (server/worldMapBrush.js).
+registerWorldMapBrushRoutes(app, jsonParser);
 
 app.get("/api/hoi/provinces", (req, res) => {
   try {

@@ -34,6 +34,7 @@ import {
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import ArmiesLayer from "./ArmiesLayer.jsx";
 import { getFrontDraw, toggleFrontDrawState } from "./frontDrawStore.js";
+import { brushProvince, getBrush, useBrush } from "./brushStore.js";
 import { setWorldMapState, worldMapPreviewMode } from "./worldMapStore.js";
 import { adjacencyFromArcs, classifyOwnerChanges, desaturate, easeAt, onScreen, spreadOrder } from "./motion/motionPlan.js";
 import { animate, currentTimings } from "./motion/motionEngine.js";
@@ -216,17 +217,33 @@ const WorldMapLayer = () => {
   // Phase 7.7 : pendant qu'on dessine un front (frontDrawStore.js), un clic sur
   // une province ajoute ou retire son état du tracé.
   useEffect(() => {
-    if (!map || !data?.useOverrides) return undefined;
+    if (!map || !data) return undefined;
     const onClick = (event) => {
-      if (!getFrontDraw().drawing) return;
+      const drawing = data.useOverrides && getFrontDraw().drawing;
+      if (!drawing && !getBrush().painting) return;
       const feature = map.queryRenderedFeatures?.(event.point, { layers: ["worldmap-fill"] })?.[0];
       const province = Number(feature?.id);
+      // Phase 12 : l'éditeur au pinceau (brushStore.js) prend la province elle-même.
+      if (getBrush().painting) { if (data.scenario?.states?.[province - 1]) brushProvince(province); return; }
       const stateId = Number.isFinite(province) ? data.scenario?.states?.[province - 1] : "";
       if (stateId) toggleFrontDrawState(stateId);
     };
     map.on("click", onClick);
     return () => map.off("click", onClick);
   }, [map, data]);
+
+  // Les provinces peintes, en surbrillance ; la capitale posée, plus vive.
+  const brush = useBrush();
+  const brushed = useRef(new Set());
+  useEffect(() => {
+    if (!map?.getSource?.(SOURCE)) return;
+    const now = new Set(brush.painting ? brush.provinces : []);
+    for (const id of new Set([...brushed.current, ...now])) {
+      const level = id === brush.capital ? 2 : now.has(id) ? 1 : 0;
+      try { map.setFeatureState({ source: SOURCE, sourceLayer: "provinces", id }, { brush: level }); } catch { /* source rechargée */ }
+    }
+    brushed.current = now;
+  }, [map, brush]);
   useEffect(() => () => setWorldMapState({ active: false, owners: null }), []);
 
   // Phase 9 : les noms de pays gravés de la proposition v3 (clairs, contour sombre).
@@ -380,6 +397,17 @@ const WorldMapLayer = () => {
         type="fill"
         source-layer="provinces"
         paint={{ "fill-color": FILL_COLOUR, "fill-opacity": POLITICAL_OPACITY, "fill-antialias": false }}
+      />
+      {/* Phase 12 : les provinces que l'éditeur au pinceau a prises. */}
+      <Layer
+        id="worldmap-brush"
+        type="fill"
+        source-layer="provinces"
+        paint={{
+          "fill-color": ["case", ["==", ["coalesce", ["feature-state", "brush"], 0], 2], "#ff5a36", "#ffd84a"],
+          "fill-opacity": ["case", [">", ["coalesce", ["feature-state", "brush"], 0], 0], 0.6, 0],
+          "fill-antialias": false,
+        }}
       />
       <Layer
         id="worldmap-province-lines"

@@ -46,6 +46,8 @@ export const MAP_LAYER_ORDER = [
   "worldmap-relief",
   // Occupied states, hatched in their lawful sovereign's colour over the occupier's.
   "worldmap-occupation",
+  // Phase 12 : les provinces que l'éditeur au pinceau a prises.
+  "worldmap-brush",
   "worldmap-province-lines",
   "worldmap-country-borders",
   "worldmap-country-borders-inner",

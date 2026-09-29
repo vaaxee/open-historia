@@ -92,7 +92,7 @@ test("wired: the dock button with armies, the map click while drawing, the drawn
   assert.match(chat, /width: dockWidthFor\(\(hasProduction \? 4 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
   assert.match(read("GameUI", "search.jsx"), /besideDockLeftFor\(\(hasProduction \? 4 : 0\) \+ \(hasArmies \? 1 : 0\)\)/);
   const layer = read("Map", "WorldMapLayer.jsx");
-  assert.match(layer, /if \(!getFrontDraw\(\)\.drawing\) return;/);
+  assert.match(layer, /const drawing = data\.useOverrides && getFrontDraw\(\)\.drawing;/);
   assert.match(layer, /if \(stateId\) toggleFrontDrawState\(stateId\);/);
   assert.match(read("Map", "ArmiesLayer.jsx"), /id="worldmap-front-draw"/);
   assert.match(read("GameUI", "fronts.jsx"), /const result = await updateHoiWorld\(\(current\) => \{/, "written through the same guarded write as Production");
