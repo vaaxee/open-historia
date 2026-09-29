@@ -645,18 +645,21 @@ export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitNa
 // so on such a map nothing could be framed: not the event camera, not an event
 // card's links. The map's own records know each drawn region's box (or at least
 // its centre, around which a small frame is enough to fly to), and a polity
-// framed by the regions it holds is framed well. Stock outlines win where they
-// exist; a centre that is missing is null, never 0,0.
+// framed by the regions it holds is framed well. A drawn region's own box wins
+// (test G: the tile archive predated the world map's re-alignment, and an event
+// in Rivne flew the camera to Hungary); stock outlines win only over a bare
+// centre. A centre that is missing is null, never 0,0.
 export const withDrawnRegionBounds = (regionBounds, regions) => {
   let merged = null;
   for (const region of regions ?? []) {
     const id = String(region?.id ?? "");
-    if (!id || regionBounds?.has?.(id) || merged?.has(id)) continue;
-    const bounds = isBounds(region?.bounds)
-      ? region.bounds
-      : typeof region?.lng === "number" && typeof region?.lat === "number"
+    if (!id || merged?.has(id)) continue;
+    const box = isBounds(region?.bounds) ? region.bounds : null;
+    if (!box && regionBounds?.has?.(id)) continue;
+    const bounds = box
+      ?? (typeof region?.lng === "number" && typeof region?.lat === "number"
         ? pointBounds(region.lng, region.lat)
-        : null;
+        : null);
     if (!bounds) continue;
     if (!merged) merged = new Map(regionBounds ?? []);
     merged.set(id, bounds);

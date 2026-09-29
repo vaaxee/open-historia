@@ -5,7 +5,7 @@ import path from "node:path";
 import url from "node:url";
 import { armyStackFeatures, battleFeatures, frontFeatures } from "./armyFeatures.js";
 import { MAP_LAYER_ORDER } from "./mapLayerOrder.js";
-import { battleSheetRows, findBattle } from "../GameUI/battleSheet.js";
+import { battleSheetRows, battleSheetTitle, findBattle } from "../GameUI/battleSheet.js";
 import { militaryStats } from "../GameUI/militaryStats.js";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -47,15 +47,36 @@ test("the battle sheet: forces, the factors that weighed, power, dice, result, l
   const rows = battleSheetRows(battle);
   const byLabel = Object.fromEntries(rows.map((row) => [row.label, row.value]));
   assert.equal(byLabel.Attacker, "Soviet Union (breakthrough)");
-  assert.equal(byLabel["Attacking forces"], "6 infanterie");
+  assert.equal(byLabel["Attacking forces"], "6 infantry");
   assert.equal(byLabel.Breakthrough, "×1.25");
   assert.equal(byLabel.Air, "×1.06");
   assert.equal(byLabel["River crossing"], undefined, "a factor that did not weigh is not listed");
   assert.equal(byLabel.Result, "State captured");
-  assert.equal(byLabel.Losses, "600 / 1400 men");
+  assert.equal(byLabel.Losses, "attacker 600 men, defender 1,400 men", "which side lost what, said in words");
   assert.equal(byLabel["Defenders fell back to"], "Alytus");
   assert.equal(findBattle([battle], battle.id), battle);
   assert.equal(findBattle([battle], ""), null);
+});
+
+// Test G: "breakthrough", "Garrison only", "winter", "against", "ratio",
+// "State captured", "men" and "Warsaw" in a French game.
+test("the battle sheet in French: every label, every value, every name", () => {
+  const french = { ...battle, defender: "Poland", stateName: "Rivne", terrain: "marais", weather: "winter", garrison: true, defenders: {}, retreatTo: "Warsaw", garrisonTaken: 3000, factors: { ...battle.factors, weather: 0.8 } };
+  const rows = battleSheetRows(french, { language: "fr" });
+  const byLabel = Object.fromEntries(rows.map((row) => [row.label, row.value]));
+  assert.equal(byLabel.Attaquant, "Union soviétique (percer)");
+  assert.equal(byLabel["Forces d'attaque"], "6 infanterie");
+  assert.equal(byLabel["Défenseur"], "Pologne");
+  assert.equal(byLabel["Forces en défense"], "Garnison seule");
+  assert.equal(byLabel.Terrain, "marais (défense ×1)");
+  assert.equal(byLabel["Météo"], "hiver (attaque ×0.8)");
+  assert.equal(byLabel.Puissance, "8.2 contre 1.4 (rapport 5.86)");
+  assert.equal(byLabel["Résultat"], "État pris");
+  assert.match(byLabel.Pertes, /^attaquant 600 hommes, défenseur 1[\s  ]400 hommes$/);
+  assert.equal(byLabel["Repli des défenseurs sur"], "Varsovie");
+  assert.equal(battleSheetTitle(french, { language: "fr" }), "Bataille de Rovno");
+  const text = rows.map((row) => `${row.label} ${row.value}`).join(" ");
+  for (const english of ["breakthrough", "Garrison", "winter", "against", "ratio", "captured", " men", "Warsaw"]) assert.ok(!text.includes(english), english);
 });
 
 test("the Statistics tab's military figures", () => {

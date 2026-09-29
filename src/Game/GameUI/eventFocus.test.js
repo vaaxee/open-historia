@@ -12,7 +12,20 @@ import {
   mergeFeatureParts,
   resolvePolityBounds,
   tileGeometryParts,
+  withDrawnRegionBounds,
 } from "./eventFocus.js";
+
+// Test G: an event in Rivne flew the camera to Hungary — the stock tile archive
+// predated the world map's re-alignment and knew the same id somewhere else.
+test("a drawn region's own box wins over the stock archive; a bare centre does not", () => {
+  const stock = new Map([["imp-rgb-AA7700", [[17, 46], [20, 48]]], ["old", [[1, 1], [2, 2]]]]);
+  const merged = withDrawnRegionBounds(stock, [
+    { id: "imp-rgb-AA7700", bounds: [[23.1, 50.9], [27.3, 52.2]] },
+    { id: "old", lng: 50, lat: 50 },
+  ]);
+  assert.deepEqual(merged.get("imp-rgb-AA7700"), [[23.1, 50.9], [27.3, 52.2]]);
+  assert.deepEqual(merged.get("old"), [[1, 1], [2, 2]], "a centre alone does not replace an outline");
+});
 
 const COUNTRY_BOXES = {
   GBR: [[-8.6, 49.9], [1.8, 58.7]],

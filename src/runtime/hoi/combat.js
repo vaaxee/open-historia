@@ -27,6 +27,7 @@
 
 import { divisionStrength, templatesFor } from "./armies.js";
 import { frontLine, normalizeFronts } from "./fronts.js";
+import { placeNameFor } from "../worldmap/placeNames.js";
 
 export const COMBAT_TUNING = Object.freeze({
   // Attaque et défense de base par gabarit terrestre.
@@ -57,8 +58,12 @@ export const COMBAT_TUNING = Object.freeze({
   // Rapport de forces à partir duquel l'état est pris, en dessous duquel l'attaque est repoussée.
   captureRatio: 1.3,
   repelRatio: 0.8,
-  // Un état sans division ennemie a sa garnison (une demi-division de défense).
+  // Un état sans division ennemie a sa garnison (une demi-division de défense),
+  // de tant d'hommes.
   garrison: 0.6,
+  garrisonMen: 3000,
+  // Chaque bond d'une percée réduit l'attaque de tant (au plus de moitié).
+  chainFatigue: 0.1,
   // Pertes par semaine de combat, à rapport de forces égal ; organisation perdue.
   lossPerWeek: 0.03,
   organisationLoss: Object.freeze({ attacker: 25, defender: 20 }),
@@ -158,15 +163,16 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
     const enemyAir = { fighters: airWings(armies[front.enemy], templates, "chasse") };
     const air = 1 + clamp((ownAir.fighters - enemyAir.fighters) * T.airPerWing, -T.airCap, T.airCap) + Math.min(T.bomberCap, ownAir.bombers * T.bomberPerWing);
     let captured = 0;
+    // Où se tient une division maintenant : après un repli de ce tour, là où elle s'est repliée.
+    const defendersIn = (target) => [...byId.values()].filter(({ owner, division }) => (outcome[division.id]?.stateId || division.stateId) === target
+      && enemySide.has(key(owner)) && T.stats[division.template] && !outcome[division.id]?.removed);
 
-    targets.forEach((target, index) => {
-      const assigned = attackers.filter((_, i) => i % targets.length === index);
-      if (!assigned.length) return;
+    // Une bataille : `origins` sont les états d'où l'on attaque (le fleuve se
+    // juge entre eux et la cible), `step` le rang d'un bond de percée.
+    const fight = (target, assigned, origins, step = 0) => {
       const info = map.infoOf(target) ?? {};
       const terrain = clean(info.terrain) || "plaine";
-      const defenders = [...byId.values()].filter(({ owner, division }) => division.stateId === target && enemySide.has(key(owner))
-        && T.stats[division.template] && !outcome[division.id]?.removed);
-      const origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
+      const defenders = defendersIn(target);
       const river = origins.length > 0 && origins.every((from) => map.riverBetween?.(from, target));
       const fort = Math.max(0, Math.round(num(fortAt(target))));
       const weather = weatherAt(date, map.latOf?.(target));
@@ -185,16 +191,21 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
         weather: weather === "winter" ? T.winterAttack : weather === "mud" ? T.mudAttack : 1,
         air: round2(air),
         dice: round2(1 + T.dice * (2 * seededRandom(`${seed}|${date}|${front.id}|${target}`) - 1)),
+        // Chaque bond d'une percée essouffle un peu l'attaque.
+        ...(step > 0 ? { fatigue: round2(Math.max(0.5, 1 - T.chainFatigue * step)) } : {}),
       };
-      const attack = round2(attackBase * factors.posture * factors.weather * factors.air * factors.dice);
+      const attack = round2(attackBase * factors.posture * factors.weather * factors.air * factors.dice * (factors.fatigue ?? 1));
       const defense = round2(defenseBase * factors.terrain * factors.river * factors.fort * factors.hold);
       const ratio = defense > 0 ? round2(attack / defense) : 99;
       const canTake = captured < allowance;
       const result = ratio >= T.captureRatio && canTake ? "captured" : ratio >= T.repelRatio ? "stalemate" : "repelled";
 
+      // Les pertes suivent le rapport de forces : l'attaquant d'une résistance
+      // écrasée ne perd presque rien (test G : 3 000 hommes contre une garnison
+      // qui, elle, ne perdait personne), le défenseur écrasé perd l'essentiel.
       const base = T.lossPerWeek * weeks;
-      const attackerLoss = round2(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.3, 3) * (front.posture === "breakthrough" ? T.breakthroughLosses : 1), 0, 0.6));
-      const defenderLoss = round2(clamp(base * clamp(ratio, 0.3, 3) * (result === "captured" ? 1.5 : 1), 0, 0.8));
+      const attackerLoss = round2(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.05, 3) * (front.posture === "breakthrough" ? T.breakthroughLosses : 1), 0, 0.6));
+      const defenderLoss = round2(clamp(base * clamp(ratio, 0.3, 6) * (result === "captured" ? 1.5 : 1), 0, 0.8));
       const menBefore = { attacker: 0, defender: 0 };
       for (const { division } of assigned) {
         menBefore.attacker += num(division.men);
@@ -250,13 +261,45 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
         power: { attack, defense, ratio },
         losses: {
           attacker: Math.round(menBefore.attacker * attackerLoss),
-          defender: Math.round(menBefore.defender * defenderLoss),
+          // Une garnison prise est perdue tout entière (tuée ou captive).
+          defender: defenders.length
+            ? Math.round(menBefore.defender * defenderLoss)
+            : result === "captured" ? T.garrisonMen : Math.round(T.garrisonMen * defenderLoss),
         },
         result,
         retreatTo: retreat ? (map.nameOf?.(retreat) ?? retreat) : "",
         surrendered: result === "captured" && !retreat ? defenders.length : 0,
+        garrisonTaken: result === "captured" && defenders.length === 0 ? T.garrisonMen : 0,
       });
-    });
+      return result;
+    };
+
+    if (front.posture === "breakthrough") {
+      // La percée : l'axe d'abord, puis, tant qu'elle passe et que le plafond le
+      // permet, l'état ennemi suivant derrière celui qu'elle vient de prendre
+      // (le moins défendu), avec toutes les divisions du front.
+      let target = ordered[0];
+      let origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
+      let step = 0;
+      while (target && captured < allowance) {
+        if (fight(target, attackers, origins, step) !== "captured") break;
+        step += 1;
+        const last = target;
+        const nextTo = new Set(list(map.neighboursOf(last)));
+        const reach = new Set([...line.enemy, ...[...taken].flatMap((id) => list(map.neighboursOf(id)))]);
+        const next = [...reach]
+          .filter((id) => enemySide.has(key(map.controllerOf(id))) && !taken.has(id))
+          .sort((a, b) => Number(!nextTo.has(a)) - Number(!nextTo.has(b)) || defendersIn(a).length - defendersIn(b).length || a.localeCompare(b));
+        target = next[0];
+        origins = target ? [...taken].filter((id) => list(map.neighboursOf(id)).includes(target)) : [];
+        if (target && !origins.length) origins = line.pairs.filter(([, to]) => to === target).map(([from]) => from);
+      }
+    } else {
+      targets.forEach((target, index) => {
+        const assigned = attackers.filter((_, i) => i % targets.length === index);
+        if (assigned.length) fight(target, assigned, line.pairs.filter(([, to]) => to === target).map(([from]) => from));
+      });
+    }
   }
 
   // Les poches : une division encerclée depuis assez longtemps et sans organisation se rend.
@@ -311,7 +354,9 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
   const words = RESULT_WORDS[fr ? "fr" : "en"];
   const attacker = nameOf(battle.attacker);
   const defender = nameOf(battle.defender);
-  const place = battle.stateName;
+  // Les lieux dans la langue du tour (test G : « Warsaw » dans un récit français).
+  const place = placeNameFor(battle.stateName, fr ? "fr" : "en");
+  const retreatTo = placeNameFor(battle.retreatTo, fr ? "fr" : "en");
   const title = fr ? `Bataille de ${place} : ${words[battle.result]}` : `Battle of ${place}: ${words[battle.result]}`;
   const sides = fr
     ? `${attacker} attaque ${place}, tenue par ${defender}${battle.garrison ? " (garnison seule)" : ""}.`
@@ -319,10 +364,13 @@ export const battleEvent = (battle, { language = "en", nameOf = (name) => name }
   const losses = fr
     ? `Pertes : ${battle.losses.attacker.toLocaleString("fr-FR")} hommes pour ${attacker}, ${battle.losses.defender.toLocaleString("fr-FR")} pour ${defender}.`
     : `Losses: ${battle.losses.attacker.toLocaleString("en-US")} men for ${attacker}, ${battle.losses.defender.toLocaleString("en-US")} for ${defender}.`;
+  const garrison = battle.garrisonTaken
+    ? (fr ? ` ; la garnison (${battle.garrisonTaken.toLocaleString("fr-FR")} hommes) est tuée ou capturée` : `; its garrison (${battle.garrisonTaken.toLocaleString("en-US")} men) is killed or captured`)
+    : "";
   const end = battle.result === "captured"
     ? (fr
-      ? `${place} passe sous le contrôle de ${attacker}${battle.retreatTo ? ` ; les défenseurs se replient sur ${battle.retreatTo}` : battle.surrendered ? ` ; ${battle.surrendered} division(s) sans issue se rendent` : ""}.`
-      : `${place} falls under ${attacker}'s control${battle.retreatTo ? `; the defenders fall back on ${battle.retreatTo}` : battle.surrendered ? `; ${battle.surrendered} trapped division(s) surrender` : ""}.`)
+      ? `${place} passe sous le contrôle de ${attacker}${retreatTo ? ` ; les défenseurs se replient sur ${retreatTo}` : battle.surrendered ? ` ; ${battle.surrendered} division(s) sans issue se rendent` : garrison}.`
+      : `${place} falls under ${attacker}'s control${retreatTo ? `; the defenders fall back on ${retreatTo}` : battle.surrendered ? `; ${battle.surrendered} trapped division(s) surrender` : garrison}.`)
     : battle.result === "repelled"
       ? (fr ? `L'attaque est repoussée ; ${place} reste à ${defender}.` : `The attack is thrown back; ${place} stays with ${defender}.`)
       : (fr ? `Les combats restent indécis ; ${place} reste à ${defender}.` : `The fighting is indecisive; ${place} stays with ${defender}.`);

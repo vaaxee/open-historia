@@ -139,8 +139,35 @@ test("wired: the schema offers 'front', and the turn applies the fronts after th
   assert.match(schemas, /enum: \["modifier", "stock", "line", "research", "damage", "recruit", "front"\]/);
   const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
   const engine = gameplay.indexOf("supplyFor: await supplyForTurn(impactedWorld),");
-  const fronts = gameplay.indexOf("impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });");
-  assert.ok(engine > 0 && fronts > engine);
+  // Test G: after this turn's wars are in the world, so a war declared this turn
+  // has its fronts at once (Poland opened its only after the first battle).
+  const wars = gameplay.indexOf("const warMerge = applyWarUpdates({\n    world: worldWithImpacts,") >= 0
+    ? gameplay.indexOf("const warMerge = applyWarUpdates({\n    world: worldWithImpacts,")
+    : gameplay.indexOf("const warMerge = applyWarUpdates({\r\n    world: worldWithImpacts,");
+  const capitulation = gameplay.indexOf("const capitulated = applyEngineCapitulations(worldWithImpacts, {");
+  const fronts = gameplay.indexOf("worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });");
+  assert.ok(engine > 0 && wars > engine && capitulation > wars && fronts > capitulation);
+  // And before the battles: the default defence runs on the starting world.
+  assert.match(gameplay, /const world = applyFrontsForTurn\(start, \{ map, player: toCountryName\(normalizeString\(bundle\.game\?\.country\)\) \}\)\.world;/);
+});
+
+test("an axis keeps its name, and a taken axis is cleared at the turn", () => {
+  const opened = applyFrontOps([
+    { op: "create", polity: "Soviet Union", enemy: "Lithuania" },
+    { op: "posture", polity: "Soviet Union", enemy: "Lithuania", posture: "breakthrough", axis: "kaunas" },
+  ], context());
+  assert.equal(opened.fronts[0].axisName, "Kaunas");
+  assert.match(opened.notes[1].text, /\(axis Kaunas\)/);
+  const world = { wars, hoi: { series: "1936", armies: opened.armies, fronts: opened.fronts }, regionOwnershipOverrides: { kaunas: "Soviet Union" } };
+  const { world: next, notes } = applyFrontsForTurn(world, { map: map(world), player: "Soviet Union" });
+  assert.equal(next.hoi.fronts.find((front) => front.owner === "Soviet Union").axis, "");
+  assert.ok(notes.some((note) => /axis Kaunas is taken/.test(note.text)));
+});
+
+test("an outreach repeating a thread an event opened is left out (test G: France twice)", () => {
+  const gameplay = fs.readFileSync(path.join(here, "..", "..", "Game", "AI", "gameplay.js"), "utf8");
+  assert.match(gameplay, /if \(keys\.some\(\(entry\) => openedThisTurn\.has\(entry\)\)\) \{/);
+  assert.match(gameplay, /export const outreachKey = /);
 });
 
 test("a country at war that is not the player holds its border by itself; the player's army is left alone", () => {

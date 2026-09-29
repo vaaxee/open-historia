@@ -72,7 +72,12 @@ export const applyFrontsForTurn = (world, { events = [], map, date = "", player 
     }
   }
 
-  // 4. Chaque front redéploie ses divisions sur sa ligne du moment.
+  // 4. Un axe pris est atteint : il s'efface, le joueur ou l'IA en choisit un autre.
+  context.fronts = context.fronts.map((front) => (front.axis && map.controllerOf(front.axis) === front.owner
+    ? (notes.push({ kind: "adjusted", text: `frontOps — ${front.owner}'s axis ${front.axisName || front.axis} is taken; the front has no axis until a new one is chosen.` }), { ...front, axis: "", axisName: "" })
+    : front));
+
+  // 5. Chaque front redéploie ses divisions sur sa ligne du moment.
   let armies = context.armies;
   for (const front of context.fronts) {
     if (!armies[front.owner]) continue;

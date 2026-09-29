@@ -1,7 +1,9 @@
 // Phase 7.6 — le sous-onglet militaire des Statistiques (militaryStats.js).
 import React from "react";
 import { militaryStats } from "./militaryStats.js";
-import { RESULT_LABELS } from "./battleSheet.js";
+import { sheetWords } from "./battleSheet.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
+import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
 
 const box = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", marginTop: "0.8rem", padding: "0.65rem 0.8rem" };
 const heading = { color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em", marginBottom: "0.4rem", textTransform: "uppercase" };
@@ -13,6 +15,9 @@ const MilitaryStats = ({ world, targetCountry }) => {
     if (!stats) {
         return <p style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.76rem", marginTop: "1rem" }}>This country has no army tracked by the engine.</p>;
     }
+    // Valeurs dans la langue du joueur : lieux, pays, postures, résultats.
+    const language = getStoredLanguage();
+    const words = sheetWords(language);
     const produced = Object.entries(stats.produced).filter(([, count]) => count > 0);
     const reserve = Object.entries(stats.stockpile).filter(([, count]) => count > 0);
     return (
@@ -24,7 +29,7 @@ const MilitaryStats = ({ world, targetCountry }) => {
                 <div style={row}><span>Manpower available</span><span data-no-translate="">{num(stats.manpower)}</span></div>
                 {stats.divisions.map((group) => (
                     <div key={group.template} style={row}>
-                        <span>{group.label}</span>
+                        <span data-no-translate="">{words.templates[group.template] ?? group.label}</span>
                         <span data-no-translate="">{group.count} · {Math.round(group.strength * 100)}% · org {group.organisation}</span>
                     </div>
                 ))}
@@ -48,8 +53,8 @@ const MilitaryStats = ({ world, targetCountry }) => {
                 {stats.fronts.length === 0 && <div style={row}><span>No front</span></div>}
                 {stats.fronts.map((front) => (
                     <div key={front.id} style={row}>
-                        <span data-no-translate="">{front.owner} → {front.enemy}</span>
-                        <span>{front.posture} · {front.divisionIds.length}</span>
+                        <span data-no-translate="">{words.polity(front.owner)} → {words.polity(front.enemy)}</span>
+                        <span data-no-translate="">{words.postures[front.posture] ?? front.posture} · {front.divisionIds.length}</span>
                     </div>
                 ))}
             </div>
@@ -58,8 +63,8 @@ const MilitaryStats = ({ world, targetCountry }) => {
                 {stats.battles.length === 0 && <div style={row}><span>No battle yet</span></div>}
                 {stats.battles.map((battle) => (
                     <div key={battle.id} style={row}>
-                        <span data-no-translate="">{battle.date} · {battle.stateName}</span>
-                        <span>{RESULT_LABELS[battle.result] ?? battle.result}</span>
+                        <span data-no-translate="">{battle.date} · {placeNameFor(battle.stateName, language)}</span>
+                        <span data-no-translate="">{words.results[battle.result] ?? battle.result}</span>
                     </div>
                 ))}
                 {stats.lostInBattle > 0 && <div style={{ ...row, color: "#fca5a5" }}><span>Men lost in these battles</span><span data-no-translate="">{num(stats.lostInBattle)}</span></div>}

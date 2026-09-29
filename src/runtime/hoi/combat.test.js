@@ -54,15 +54,33 @@ test("the same battle twice gives the same result; weather by season and latitud
 
 test("six Soviet divisions against one Lithuanian on open ground: Kaunas is taken, the defenders fall back", () => {
   const { battles, captures, outcome } = run(world({ posture: "breakthrough" }));
-  assert.equal(battles.length, 1, "breakthrough: the axis alone");
   const [battle] = battles;
-  assert.equal(battle.stateName, "Kaunas");
+  assert.equal(battle.stateName, "Kaunas", "the axis first");
   assert.equal(battle.result, "captured");
-  assert.deepEqual(captures, [{ stateId: "kaunas", stateName: "Kaunas", from: "Lithuania", to: "Soviet Union", frontId: "f" }]);
+  assert.deepEqual(captures[0], { stateId: "kaunas", stateName: "Kaunas", from: "Lithuania", to: "Soviet Union", frontId: "f" });
   assert.ok(["Alytus", "Memel"].includes(battle.retreatTo));
-  assert.ok(battle.losses.attacker > 0 && battle.losses.defender > 0);
-  assert.equal(outcome.s0.stateId, "kaunas", "the attackers move in");
-  assert.ok(outcome.l0.stateId && outcome.l0.stateId !== "kaunas");
+  assert.ok(battle.losses.defender > battle.losses.attacker, "the crushed side loses the most");
+  assert.ok(outcome.l0.stateId && outcome.l0.stateId !== "kaunas", "the defenders fall back");
+  assert.equal(outcome.s0.stateId, captures.at(-1).stateId, "the attackers stand where the breakthrough stopped");
+});
+
+// Test G: thirty divisions in breakthrough against garrisons took one state in a week.
+test("a breakthrough keeps going while nothing stops it, up to the front's weekly ceiling", () => {
+  const { battles, captures } = run(world({ posture: "breakthrough", lithuanian: 0 }));
+  assert.equal(captures.length, 3, "Kaunas, then what lies behind it, up to three");
+  assert.deepEqual(battles.map((b) => b.result), ["captured", "captured", "captured"]);
+  assert.equal(battles[0].stateName, "Kaunas");
+  assert.ok(battles[1].factors.fatigue < 1 && battles[2].factors.fatigue < battles[1].factors.fatigue, "each bound tires the attack");
+});
+
+// Test G: "3000 / 0 men" at 47 to 1 against a garrison.
+test("a crushed garrison loses its men; its attacker loses next to nothing", () => {
+  const { battles } = run(world({ posture: "breakthrough", lithuanian: 0 }));
+  const [battle] = battles;
+  assert.equal(battle.garrison, true);
+  assert.equal(battle.losses.defender, COMBAT_TUNING.garrisonMen);
+  assert.equal(battle.garrisonTaken, COMBAT_TUNING.garrisonMen);
+  assert.ok(battle.losses.attacker < 300, `${battle.losses.attacker} men lost against a garrison crushed at ${battle.power.ratio} to 1`);
 });
 
 test("one division against a defended forest with a river and forts is thrown back", () => {
@@ -79,7 +97,7 @@ test("one division against a defended forest with a river and forts is thrown ba
 test("attack spreads over several states up to the front's weekly allowance; hold does not fight; no war, no battle", () => {
   const { battles } = run(world({ soviet: 6 }));
   assert.deepEqual(battles.map((b) => b.stateName).sort(), ["Alytus", "Kaunas"], "both states in contact");
-  assert.ok(battles.every((b) => b.garrison === (b.stateName === "Alytus")), "an empty state has its garrison");
+  assert.equal(battles.find((b) => b.stateName === "Kaunas").garrison, false, "Kaunas has its division");
   assert.equal(run(world({ posture: "hold" })).battles.length, 0);
   assert.equal(resolveCombat({ world: world(), map: map(), atWar: () => false, date: "1936-06-10" }).battles.length, 0);
 });
@@ -102,8 +120,8 @@ test("the outcome is carried onto the armies of the moment, recruits and all", (
   const next = applyCombatOutcome(now, outcome);
   const s0 = next["Soviet Union"].divisions.find((d) => d.id === "s0");
   assert.ok(s0.men < 10000 && s0.equipment.fusils < 220);
-  assert.equal(s0.organisation, 100 - COMBAT_TUNING.organisationLoss.attacker);
-  assert.equal(s0.stateId, "kaunas");
+  assert.ok(s0.organisation <= 100 - COMBAT_TUNING.organisationLoss.attacker, "every battle costs organisation");
+  assert.ok(["kaunas", "alytus", "memel"].includes(s0.stateId));
   assert.equal(next["Soviet Union"].divisions.find((d) => d.id === "recruit").stateId, "moscow", "untouched");
   assert.equal(applyCombatOutcome(now, {}), now);
 });
@@ -111,9 +129,12 @@ test("the outcome is carried onto the armies of the moment, recruits and all", (
 test("the battle's own event, and the sheet the AI reads", () => {
   const { battles } = run(world({ posture: "breakthrough" }));
   const event = battleEvent(battles[0], { language: "fr", nameOf: (name) => ({ "Soviet Union": "Union soviétique", Lithuania: "Lituanie" })[name] ?? name });
-  assert.equal(event.title, "Bataille de Kaunas : prise");
-  assert.match(event.description, /^Union soviétique attaque Kaunas, tenue par Lituanie\. Pertes : [\d\s  ]+ hommes pour Union soviétique, [\d\s  ]+ pour Lituanie\. Kaunas passe sous le contrôle de Union soviétique ; les défenseurs se replient sur (Alytus|Memel)\.$/);
+  // The places by their French names of the time (Kaunas was Kovno).
+  assert.equal(event.title, "Bataille de Kovno : prise");
+  assert.match(event.description, /^Union soviétique attaque Kovno, tenue par Lituanie\. Pertes : .+ Kovno passe sous le contrôle de Union soviétique ; les défenseurs se replient sur (Alytus|Memel)\.$/);
+  const garrison = battleEvent({ ...battles[0], retreatTo: "", garrisonTaken: 3000 }, { language: "fr" });
+  assert.match(garrison.description, /la garnison \(3[\s  ]000 hommes\) est tuée ou capturée\.$/);
   assert.deepEqual(event.impacts.regionControlOps, [{ op: "control", regionId: "kaunas", regionName: "Kaunas", fromCode: "Lithuania", toCode: "Soviet Union", note: `engine battle ${battles[0].id}` }]);
   assert.equal(event.source, "engine");
-  assert.match(describeBattles(battles), /^- 1936-06-10 Kaunas: Soviet Union \(breakthrough\) against Lithuania — power [\d.]+ vs [\d.]+ \(terrain plaine ×1, dice ×[\d.]+\) → CAPTURED; losses \d+ \/ \d+ men; defenders retreat to (Alytus|Memel)\.$/);
+  assert.match(describeBattles(battles).split("\n")[0], /^- 1936-06-10 Kaunas: Soviet Union \(breakthrough\) against Lithuania — power [\d.]+ vs [\d.]+ \(terrain plaine ×1, dice ×[\d.]+\) → CAPTURED; losses \d+ \/ \d+ men; defenders retreat to (Alytus|Memel)\.$/);
 });

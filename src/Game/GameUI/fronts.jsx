@@ -11,6 +11,9 @@ import { useWorldMapState } from "../Map/worldMapStore.js";
 import { startFrontDraw, stopFrontDraw, useFrontDraw } from "../Map/frontDrawStore.js";
 import { applyPlayerFrontOp, frontsPanelModel, panelMap } from "./frontsModel.js";
 import { HOI_WRITE_ERRORS, updateHoiWorld } from "./hoiWrites.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
+import { placeNameFor } from "../../runtime/worldmap/placeNames.js";
+import { frenchPolityName } from "../../runtime/polityExonyms.js";
 
 const selectWorld = (world) => world ?? null;
 const selectCountry = (game) => String(game?.country ?? "");
@@ -52,6 +55,10 @@ const FrontsPanel = ({ isOpen, onClose }) => {
     [world, info, worldMap.stateOwners, worldMap.stateNames],
   );
   const model = useMemo(() => (world?.hoi?.armies ? frontsPanelModel(world, country, map) : null), [world, country, map]);
+  // Les lieux et les pays dans la langue du joueur (test G : « axe imp-rgb-AA7700 »).
+  const language = getStoredLanguage();
+  const place = (name) => placeNameFor(name, language);
+  const polity = (name) => (/^fr\b/i.test(language) ? frenchPolityName(name) : name);
   const openable = (model?.enemies ?? []).filter((entry) => !entry.hasFront);
   const chosenEnemy = openable.some((entry) => entry.name === enemy) ? enemy : openable[0]?.name ?? "";
 
@@ -98,7 +105,7 @@ const FrontsPanel = ({ isOpen, onClose }) => {
             {openable.length > 0 && (
               <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                 <select value={chosenEnemy} onChange={(event) => setEnemy(event.target.value)} style={select} aria-label="Enemy">
-                  {openable.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}
+                  {openable.map((entry) => <option key={entry.name} value={entry.name} data-no-translate="">{polity(entry.name)}</option>)}
                 </select>
                 {drawingFor === "new" ? (
                   <>
@@ -122,11 +129,14 @@ const FrontsPanel = ({ isOpen, onClose }) => {
           return (
             <div key={front.id} style={card}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontSize: "0.85rem", fontWeight: 700 }} data-no-translate="">{front.owner} → {front.enemy}</span>
+                <span style={{ fontSize: "0.85rem", fontWeight: 700 }} data-no-translate="">{polity(front.owner)} → {polity(front.enemy)}</span>
                 <span style={small}>{front.divisionIds.length} division(s)</span>
               </div>
               <div style={{ ...small, marginTop: "0.2rem" }}>
-                <span>Line: </span><span data-no-translate="">{front.ownStates.map((s) => s.name).join(", ") || "—"}</span>
+                <span>Line: </span><span data-no-translate="">{front.ownStates.map((s) => place(s.name)).join(", ") || "—"}</span>
+              </div>
+              <div style={{ ...small, marginTop: "0.15rem" }}>
+                <span>Axis: </span><span data-no-translate="">{front.axis ? place(front.axisName || front.targets.find((t) => t.id === front.axis)?.name || "?") : "—"}</span>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
                 {POSTURES.map(([value, label]) => (
@@ -139,7 +149,7 @@ const FrontsPanel = ({ isOpen, onClose }) => {
                 <select value={front.axis} style={select} aria-label="Axis" disabled={pending}
                   onChange={(event) => run({ op: "posture", frontId: front.id, posture: front.posture, axis: event.target.value })}>
                   <option value="">—</option>
-                  {front.targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
+                  {front.targets.map((target) => <option key={target.id} value={target.id} data-no-translate="">{place(target.name)}</option>)}
                 </select>
               </div>
               <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.45rem" }}>

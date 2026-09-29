@@ -47,6 +47,8 @@ export const normalizeFront = (value, index = 0) => {
     enemy,
     posture: normalizePosture(value.posture) || "hold",
     axis: clean(value.axis),
+    // Le nom de l'axe, pour les prompts et les panneaux (test G : « axe imp-rgb-AA7700 »).
+    axisName: clean(value.axis) ? clean(value.axisName) : "",
     sector: [...new Set(list(value.sector).map(clean).filter(Boolean))],
     divisionIds: [...new Set(list(value.divisionIds).map(clean).filter(Boolean))],
     createdDate: clean(value.createdDate),
@@ -122,7 +124,9 @@ export const applyFrontOp = (op, context) => {
     if (fronts.filter((front) => key(front.owner) === key(armyKey)).length >= FRONT_LIMITS.maxFrontsPerPolity) return refuse(`${armyKey} already has ${FRONT_LIMITS.maxFrontsPerPolity} fronts.`);
     const front = normalizeFront({
       id: clean(op.id) || `front-${slug(armyKey)}-${slug(enemy)}-${fronts.length + 1}`,
-      owner: armyKey, enemy, posture: op.posture, axis: op.axis, sector: op.sector, createdDate: context.date,
+      owner: armyKey, enemy, posture: op.posture, axis: op.axis,
+      axisName: op.axis ? (context.map?.nameOf?.(clean(op.axis)) || clean(op.axisName)) : "",
+      sector: op.sector, createdDate: context.date,
     });
     if (context.map && !frontLine(front, context.map).own.length) return refuse(`${armyKey} holds no state in contact with ${enemy}${front.sector.length ? " in the drawn sector" : ""}: there is no front to open.`);
     return ok(`${armyKey} opened a front against ${enemy} (${front.posture}).`, [...fronts, front]);
@@ -135,8 +139,10 @@ export const applyFrontOp = (op, context) => {
     const posture = normalizePosture(op.posture);
     if (!posture) return refuse(`"${clean(op.posture)}" is not a posture (${FRONT_POSTURES.join(", ")}).`);
     if (posture !== "hold" && !context.atWar?.(armyKey, front.enemy)) return refuse(`${armyKey} is no longer at war with ${front.enemy}: the front can only hold.`);
-    const next = { ...front, posture, ...(op.axis !== undefined ? { axis: clean(op.axis) } : {}) };
-    return ok(`${armyKey}'s front against ${front.enemy} now ${posture}${next.axis ? ` (axis ${next.axis})` : ""}.`, fronts.map((entry) => (entry.id === front.id ? next : entry)));
+    const axis = op.axis !== undefined ? clean(op.axis) : front.axis;
+    const axisName = axis ? (context.map?.nameOf?.(axis) || clean(op.axisName) || front.axisName || axis) : "";
+    const next = { ...front, posture, axis, axisName };
+    return ok(`${armyKey}'s front against ${front.enemy} now ${posture}${next.axis ? ` (axis ${axisName})` : ""}.`, fronts.map((entry) => (entry.id === front.id ? next : entry)));
   }
 
   // Un nouveau tracé (le panneau Fronts, 7.7) : vide, toute la frontière.

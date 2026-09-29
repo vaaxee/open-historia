@@ -47,7 +47,7 @@ export const describeArmyLine = (hoi, polity) => {
 // Les fronts d'un pays (ou tous) : qui contre qui, posture, axe, divisions.
 export const describeFronts = (hoi, { polity = "", nameOf = (id) => id } = {}) => normalizeFronts(hoi?.fronts)
   .filter((front) => !polity || key(front.owner) === key(polity) || key(front.enemy) === key(polity))
-  .map((front) => `- ${front.owner} against ${front.enemy}: ${front.posture}${front.axis ? `, axis ${nameOf(front.axis)}` : ""}, ${front.divisionIds.length} division(s)${front.sector.length ? `, drawn over ${front.sector.length} state(s)` : ""}.`)
+  .map((front) => `- ${front.owner} against ${front.enemy}: ${front.posture}${front.axis ? `, axis ${front.axisName || nameOf(front.axis)}` : ""}, ${front.divisionIds.length} division(s)${front.sector.length ? `, drawn over ${front.sector.length} state(s)` : ""}.`)
   .join("\n");
 
 // Le bloc complet. `polity` : le pays dont on parle d'abord (le joueur, ou le

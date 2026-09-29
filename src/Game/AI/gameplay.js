@@ -6034,6 +6034,10 @@ const checkClaimsAgainstHolders = (containers, world) => {
 // Phase 7.2 : la carte de ravitaillement de chaque pays pour ce tour
 // (runtime/worldmap/supplyMap.js), ou null hors de la carte mondiale, sans armées
 // ou sans données (le moteur ravitaille alors depuis la réserve seule).
+// The comparison key of an outreach title or opening line: case, accents and
+// punctuation ignored, the first 80 letters.
+export const outreachKey = (value) => normalizeString(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 80);
+
 // Phase 7 : ce que les armées savent de la carte pour ce tour — catalogue des
 // états, données de ravitaillement (terrain, rail, voisins), capitales — ou null
 // hors de la carte mondiale, sans armées ou sans données.
@@ -6068,11 +6072,16 @@ const supplyForTurn = async (world) => {
 // armées à l'application. Null sans front engagé, hors de la carte mondiale.
 const resolveCombatForJump = async (bundle, { originDate = "", days = 7 } = {}) => {
   try {
-    const world = bundle?.world;
-    if (!normalizeArray(world?.hoi?.fronts).length) return null;
-    const context = await armyMapContext(world);
+    const start = bundle?.world;
+    if (!normalizeArray(start?.hoi?.fronts).length) return null;
+    const context = await armyMapContext(start);
     if (!context) return null;
-    const map = buildWarMap({ world, ...context });
+    // La défense par défaut d'abord (frontsTurn.js) : un pays attaqué tient sa
+    // frontière dès la première bataille (test G : 33 divisions polonaises à
+    // Varsovie, Rivne défendue par sa seule garnison). La même mise en place se
+    // refait, à l'identique, quand le tour s'applique.
+    const map = buildWarMap({ world: start, ...context });
+    const world = applyFrontsForTurn(start, { map, player: toCountryName(normalizeString(bundle.game?.country)) }).world;
     const wars = warsFor(world);
     // Les forts de la carte, par état (le plus fort l'emporte).
     const forts = new Map();
@@ -7476,7 +7485,6 @@ const applySimulationResult = async ({
     // la carte mondiale et pour une partie qui a des armées.
     supplyFor: await supplyForTurn(impactedWorld),
   });
-  impactedWorld = await applyFrontsAfterTurn(impactedWorld, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats
@@ -7660,6 +7668,10 @@ const applySimulationResult = async ({
       worldWithImpacts = withLatestTurnEventIds(worldWithImpacts, (ids) => [...ids, ...capitulated.eventIds]);
     }
   }
+  // Phase 7.3 : les fronts, une fois les guerres du tour entrées dans le monde —
+  // test G : une guerre déclarée ce tour-ci n'était vue qu'au tour suivant, et
+  // la Pologne n'a ouvert son front qu'après la première bataille.
+  worldWithImpacts = await applyFrontsAfterTurn(worldWithImpacts, freshEvents, { date: nextGame.gameDate, receipt, player: toCountryName(normalizeString(baseGame.country)) });
   // Storylines last: they read the wars and relations as this turn left them.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
@@ -7958,7 +7970,18 @@ const applySimulationResult = async ({
   // Unprompted outreach: polities reaching out on their own initiative during
   // the simulated period, not tied to any event (treaty feelers, summit
   // invitations). Same chat machinery, no linked event.
+  // An outreach that repeats a thread an event of this turn already opened —
+  // same title or same opening words — is left out: test G showed France's
+  // appeal twice in one thread, once from the event and once as outreach.
+  const openedThisTurn = new Set(freshEvents.flatMap((event) => normalizeArray(event.impacts?.createdChats)
+    .flatMap((chat) => [chat?.title, chat?.openingMessage ?? chat?.message ?? chat?.messages?.[0]?.text])
+    .map(outreachKey).filter(Boolean)));
   for (const chatLike of normalizeArray(result.outreach)) {
+    const keys = [chatLike?.title, chatLike?.openingMessage ?? chatLike?.message ?? chatLike?.messages?.[0]?.text].map(outreachKey).filter(Boolean);
+    if (keys.some((entry) => openedThisTurn.has(entry))) {
+      noteReceipt(receipt, "withheld", `Outreach "${normalizeString(chatLike?.title)}" repeated a thread an event of this turn already opened; it was left out.`);
+      continue;
+    }
     const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
       playerName: baseGame.country,
       revealWith: lastTurnEventId,
