@@ -107,6 +107,7 @@ import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/wor
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt, isOwnClaim } from "./claimHolderCheck.js";
 import { misplacedFieldsHint } from "./misplacedFields.js";
+import { finishTurnProfile, lapClock, recordStep, startTurnProfile } from "../../runtime/turnProfile.js";
 import { describePrunedActors, pruneUnknownActors } from "./pregameActors.js";
 import { insertEventAt, ordersReversedBy, planPlayerWars, removeEventAt } from "./playerWarOrders.js";
 import {
@@ -3010,6 +3011,9 @@ const runJsonTask = async (taskKey, {
         try { onPartialEvents([]); } catch { /* as above */ }
       }
       let response;
+      // Test G : le relevé des temps (runtime/turnProfile.js) — l'appel, puis ses vérifications.
+      const callStarted = Date.now();
+      let checksStarted = callStarted;
       try {
         response = await callAI(systemPrompt, history, {
           // No output-token cap. A long/action-heavy turn's JSON must not be truncated
@@ -3061,6 +3065,7 @@ const runJsonTask = async (taskKey, {
         // so the second attempt is a plain re-ask — after a real pause when it
         // said it was busy, since its own quick retry has already failed — and
         // not the canned fallback. Anything else still ends the task as before.
+        recordStep(`AI call: ${taskKey}`, Date.now() - callStarted, { attempt: outputAttempt, ok: false, error: normalizeString(error?.message).slice(0, 160) });
         if (outputAttempt !== 1 || !error?.providerRefusal || controller.signal.aborted) throw error;
         idle.cancel();
         failureReason = normalizeString(error.message) || failureReason;
@@ -3081,6 +3086,12 @@ const runJsonTask = async (taskKey, {
       // Releases the last event, which a path stream holds back until the stream closes.
       eventReader?.finish();
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+      checksStarted = Date.now();
+      recordStep(`AI call: ${taskKey}`, checksStarted - callStarted, {
+        attempt: outputAttempt,
+        promptChars: systemPrompt.length,
+        responseChars: rawText.length || (response?.toolInput ? JSON.stringify(response.toolInput).length : 0),
+      });
       // A tool-call answer has no text of its own (Gemini sends the call with
       // no text parts), so the call's input IS the answer. Kept as such, or the
       // debug report the player copies says the provider produced nothing when
@@ -3372,6 +3383,7 @@ const runJsonTask = async (taskKey, {
         if (taskKey === "countryStatSheet" && customStatIndices && parsed && typeof parsed === "object") {
           parsed.indexKeys = [...statIndexKeys];
         }
+        recordStep(`checks: ${taskKey}`, Date.now() - checksStarted, { attempt: outputAttempt, ok: true });
         attachAttemptOutcome(attemptSink.record, { ok: true, parsedSummary: normalizeParsedSummary(taskKey, parsed) });
         logDebugEvent("ai", `Task "${taskKey}" succeeded on attempt ${outputAttempt} in ${Math.round((Date.now() - taskStartedAt) / 1000)}s.`, undefined, { verbose: true });
         // The payload that was ACCEPTED, not only the ones that were rejected.
@@ -3388,6 +3400,7 @@ const runJsonTask = async (taskKey, {
       // Every rejection, including the one attempt 2 goes on to fix. A turn that
       // came out right on the retry still tells you which rule the model keeps
       // breaking, and that is invisible in a log that only records failures.
+      recordStep(`checks: ${taskKey}`, Date.now() - checksStarted, { attempt: outputAttempt, ok: false, error: normalizeString(validation.error).slice(0, 160) });
       attachAttemptOutcome(attemptSink.record, {
         ok: false,
         validationError: validation.error,
@@ -13877,6 +13890,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // repeats WITHIN the batch as well as against the existing log, so a later
   // segment restating an earlier one cannot reach the timeline.
   const merged = mergeSegmentPayloads(state.segmentPayloads, { targetDate });
+  // Test G : le détail de la fin du tour (runtime/turnProfile.js).
+  const lap = lapClock();
 
   // While requests are being saved, every check below is answered by ONE request
   // made here (runTurnReview) — or by none, when nothing needs checking. Each
@@ -13884,6 +13899,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // place of the request it would have made. `review` is null when saving is off,
   // and each check makes its own request as before.
   const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+  lap("turn review", { ran: Boolean(review) });
 
   // The surviving military events then make the persistent order of battle
   // move: the unit director proposes ops for existing units, native rules keep
@@ -13917,6 +13933,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     console.warn("[OH unit director] pass failed; the simulator's unit operations stand.", error);
     directedEvents = merged.events;
   }
+  lap("unit director");
 
 
   // Second narrow pass: the surviving prose and front state become the native
@@ -13957,6 +13974,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     console.warn("[OH territory director] pass failed; the simulator's territorial operations stand.", error);
     territoryEvents = directedEvents;
   }
+  lap("territory director and region control");
 
   const result = {
     clearActions: merged.clearActions,
@@ -14004,6 +14022,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   state.phases?.enter("applying");
   try {
     const applied = await applySimulationResult(applyArgs);
+    lap("applying the result (world, fronts, board, write)");
     reportJumpRequests(state.requests);
     // Where the skip's time and requests went, in one line (skipPhases.js),
     // and on the result for the panel's own log entry.
@@ -14031,9 +14050,15 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   let budgetForPhases = null;
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
+  // Test G : le relevé des temps de chaque étape du tour (runtime/turnProfile.js).
+  startTurnProfile({ mode, days });
+  const lap = lapClock();
+  let profileOutcome = "failed";
+  let profilePhases = null;
   try {
   const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
+  lap("reading the game");
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.
   const safeDays = Math.max(0, Number(days) || 0);
@@ -14049,6 +14074,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // a real thread, the player's message, the counterpart's answer and verdict.
   // The turn is told each verdict; an agreement stands only if it was accepted.
   const proposals = await putPlayerProposals(bundle, { signal });
+  lap("player proposals");
   // One rule for where a skip lands, shared with the timeline's labels
   // (runtime/jumpDates.js), so a label never promises a date the jump misses.
   const dateStep = jumpDayStep(safeDays);
@@ -14062,12 +14088,23 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // dans la réponse, leurs pertes aux armées (resolveCombatForJump).
   // Phase 7.9 : le décideur local (Jev) choisit d'abord les ordres des pays IA,
   // s'il est activé et répond ; les batailles se livrent ensuite avec eux.
+  lap("dates");
   const localDecisions = await runLocalDeciderForJump(bundle, { date: originDate });
+  lap("jev (local decider)", {
+    decisions: normalizeArray(localDecisions?.decisions).length,
+    perDecisionMs: normalizeArray(localDecisions?.decisions).map((decision) => Math.round(Number(decision?.ms) || 0)),
+    promptTokens: normalizeArray(localDecisions?.decisions).map((decision) => Number(decision?.promptTokens) || 0),
+    cachedTokens: normalizeArray(localDecisions?.decisions).map((decision) => Number(decision?.cachedTokens) || 0),
+    stopped: normalizeString(localDecisions?.stopped),
+  });
   const engineCombat = await resolveCombatForJump(bundle, { originDate, days: dateStep, orders: localDecisions?.orders });
+  lap("combat (engine)", { battles: normalizeArray(engineCombat?.battles).length });
   // Phase 8 : élections, coups, focus de la période (resolvePoliticsForJump).
   const enginePolitics = resolvePoliticsForJump(bundle, { originDate, targetDate, orders: localDecisions?.orders });
+  lap("politics (engine)");
   // Phase 11 : réseaux, missions et captures de la période (resolveEspionageForJump).
   const engineEspionage = resolveEspionageForJump(bundle, { originDate, targetDate });
+  lap("espionage (engine)");
   const variables = await buildTemplateVariables({ ...bundle, ...(proposals.actions ? { actions: proposals.actions } : {}), engineCombat, enginePolitics }, {
     lookups: true,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
@@ -14078,6 +14115,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     historicalAnchorMaxItems: WORLD_SIMULATION_HISTORICAL_ANCHOR_MAX_ITEMS,
     targetDate,
   });
+  lap("prompt building", { promptVariablesChars: JSON.stringify(variables ?? {}).length });
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;
@@ -14163,8 +14201,14 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   budgetForPhases = jumpState.requests;
 
   await runJumpSegments({ context: jumpContext, onEvents, onProgress, signal, state: jumpState });
-  return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
+  lap("segments (whole answer phase)", { segments: segmentCount });
+  const finished = await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
+  lap("finishing and applying the turn (total)");
+  profileOutcome = normalizeString(finished?.generation?.source) || "ai";
+  profilePhases = finished?.phases ?? null;
+  return finished;
   } finally {
+    finishTurnProfile({ outcome: profileOutcome, ...(profilePhases ? { phases: profilePhases } : {}) });
     endSimulation();
   }
 };

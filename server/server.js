@@ -48,6 +48,7 @@ import { ensureStatesGeojson } from "./worldMapStates.js";
 import { registerWorldMapSurfaceRoutes } from "./worldMapSurfaces.js";
 import { registerJevRoutes } from "./jevProxy.js";
 import { registerWorldMapBrushRoutes } from "./worldMapBrush.js";
+import { registerTurnProfileRoutes } from "./turnProfileLog.js";
 import {
   createMapEditorDocument,
   deleteMapEditorDocument,
@@ -790,6 +791,8 @@ registerWorldMapSurfaceRoutes(app, jsonParser);
 registerJevRoutes(app, jsonParser);
 // Phase 12 : l'éditeur au pinceau (server/worldMapBrush.js).
 registerWorldMapBrushRoutes(app, jsonParser);
+// Test G : le relevé des temps d'un tour (server/turnProfileLog.js).
+registerTurnProfileRoutes(app, jsonParser);
 
 app.get("/api/hoi/provinces", (req, res) => {
   try {

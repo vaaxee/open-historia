@@ -22,6 +22,7 @@ import {
   syncLanguageFromServer,
 } from "./i18n.js";
 import { misalignedReason, textLanguage } from "./translationCheck.js";
+import { recordTranslation } from "./turnProfile.js";
 
 const CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
@@ -416,11 +417,14 @@ const processQueue = async () => {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
       const batch = planTranslationBatch(pending, { maxStrings: batchStrings });
+      // Test G : le temps de chaque lot de traduction (runtime/turnProfile.js).
+      const batchStarted = Date.now();
       const results = [
         await translateBatch(batch)
           .then((translations) => ({ batch, translations }))
           .catch((error) => ({ batch, error })),
       ];
+      recordTranslation({ ms: Date.now() - batchStarted, strings: batch.length, chars: batch.reduce((sum, text) => sum + text.length, 0), language, ok: !results[0].error });
       if (results[0].error) {
         batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
       } else if (batchStrings < BATCH_MAX_STRINGS) {

@@ -302,7 +302,11 @@ export const runLocalDecisions = async (world, { decide, map, seas = null, date 
     const best = Number.isInteger(verdict?.best) && question.options[verdict.best] ? verdict.best : 0;
     const choice = question.options[best];
     orders.push(...choice.orders);
-    decisions.push({ polity, date, questionId: question.id, question: question.question, choice: choice.text, scores: list(verdict?.scores), ms: Number(verdict?.ms) || 0 });
+    decisions.push({
+      polity, date, questionId: question.id, question: question.question, choice: choice.text, scores: list(verdict?.scores), ms: Number(verdict?.ms) || 0,
+      // Test G : ce que Jev a dû relire, et ce que son cache lui a épargné (jev.js).
+      ...(Number.isFinite(verdict?.promptTokens) ? { promptTokens: verdict.promptTokens, cachedTokens: Number(verdict?.cachedTokens) || 0 } : {}),
+    });
   }
   return { orders, decisions, ms: now() - started, stopped, asked: order.length, queued: queue.length };
 };
