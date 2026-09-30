@@ -203,7 +203,7 @@ test("the programme comes from the regime and the focus, feeds Jev's sheet, and 
   };
   assert.equal(programmeFor("Germany", hoi), 'fascist government; working on "Luftwaffe"; has done "Rearmament"');
   const sheet = decisionSheet("Germany", { memory: { programme: "Break Poland", policy: programmeFor("Germany", hoi), decisions: [] } });
-  assert.match(sheet, /\nProgramme: Break Poland\.\nPolicy: fascist government; working on "Luftwaffe"/);
+  assert.match(sheet, /\nProgramme: Break Poland\nPolicy: fascist government; working on "Luftwaffe"/);
   const questions = decisionQuestions("Germany", { armies: { Germany: { divisions: [], stockpile: {}, manpower: {} } }, fronts: [], templates: templatesFor("1936"), focus: { Germany: { completed: [] } }, politics: hoi.politics, enemiesOf: () => [] });
   assert.equal(questions.find((q) => q.id === "focus"), undefined, "one focus only available: nothing to decide");
   const later = decisionQuestions("Germany", { armies: { Germany: { divisions: [], stockpile: {}, manpower: {} } }, fronts: [], templates: templatesFor("1936"), focus: { Germany: { completed: ["ger-rearmament"] } }, politics: hoi.politics, enemiesOf: () => [] });

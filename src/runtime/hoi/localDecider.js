@@ -16,8 +16,8 @@
 // leurs résultats, ses alliances et ses rancunes. L'état du tour vient ensuite.
 //
 // Budget : au plus 20 décisions par tour, les plus importantes d'abord (les pays
-// en guerre qui attaquent ou sont attaqués, puis les autres pays en guerre, puis
-// le recrutement des pays en paix).
+// en guerre qui attaquent ou sont attaqués, puis les autres pays en guerre). Les
+// pays en paix ne sont plus soumis à Jev (test G) : les règles du moteur décident.
 //
 // Forme de world.hoi.jevMemory :
 //   { [polity]: { programme, decisions: [{ date, question, choice, result }] } }
@@ -47,7 +47,10 @@ export const forceBalance = (owner, enemies, armies, templates) => {
 export const LOCAL_DECIDER_TUNING = Object.freeze({
   maxDecisionsPerTurn: 20,
   memoryDecisions: 10,
-  sheetDecisions: 6,
+  // Test G (Jev 5 s par décision) : 3 dernières décisions sur la fiche, et des
+  // lignes bornées, pour une fiche d'environ 150 jetons au lieu de 220 à 300.
+  sheetDecisions: 3,
+  sheetLineChars: 80,
   maxOptions: 6,
   // Un tour ne passe pas plus de tant à décider (le reste suit les règles).
   turnBudgetMs: 120000,
@@ -217,26 +220,36 @@ export const decisionQuestions = (polity, context) => {
 
 // La fiche d'un pays : la tête stable (programme, alliances, rancunes, dernières
 // décisions), puis l'état du tour. `memory` : world.hoi.jevMemory[polity].
+// Une ligne de fiche bornée à `sheetLineChars` (coupée sur un mot, « … »).
+const short = (text, max = LOCAL_DECIDER_TUNING.sheetLineChars) => {
+  const value = clean(text).replace(/\.$/, "");
+  if (value.length <= max) return value;
+  return `${value.slice(0, max).replace(/[\s,;:]+\S*$/, "")}…`;
+};
+// Les forces en mots courts (la fiche est en anglais ; les libellés des gabarits sont en français).
+const SHORT_UNITS = Object.freeze({ infanterie: "infantry", blindes: "armour", artillerie: "artillery", cavalerie: "cavalry", montagne: "mountain", chasse: "fighter wings", bombardement: "bomber wings", flotte: "fleets" });
+const thousands = (value) => { const n = Math.round(Number(value) || 0); return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n); };
+
 export const decisionSheet = (polity, { memory = {}, allies = [], grudges = [], date = "", army = null, fronts = [], templates = templatesFor("1936") } = {}) => {
+  const recent = list(memory.decisions).slice(-LOCAL_DECIDER_TUNING.sheetDecisions);
   const head = [
     `You are ${polity}.`,
     // Phase 10 : celui que la grande IA a fixé, sinon celui de 1936 des puissances.
-    `Programme: ${clean(memory.programme) || POWER_PROGRAMMES_1936[polity] || "defend the country and its interests"}.`,
+    `Programme: ${short(clean(memory.programme) || POWER_PROGRAMMES_1936[polity] || "defend the country and its interests")}`,
     // Phase 8 : ce que son régime et ses focus disent de lui (focus.js programmeFor).
-    ...(clean(memory.policy) ? [`Policy: ${clean(memory.policy)}.`] : []),
-    `Allies: ${allies.length ? allies.join(", ") : "none"}.`,
-    `Grudges: ${grudges.length ? grudges.join(", ") : "none"}.`,
-    "Recent decisions:",
-    ...(list(memory.decisions).slice(-LOCAL_DECIDER_TUNING.sheetDecisions).map((entry) => `- ${entry.date}: ${entry.choice}${entry.result ? ` (${entry.result})` : ""}`)),
+    ...(clean(memory.policy) ? [`Policy: ${short(memory.policy)}`] : []),
+    `Allies: ${allies.length ? allies.join(", ") : "none"}. Enemies: ${grudges.length ? grudges.join(", ") : "none"}.`,
+    // Test G : les 3 dernières, sur une ligne chacune, date courte (MM-DD).
+    `Recent decisions:${recent.length ? "" : " none yet"}`,
+    ...recent.map((entry) => `- ${clean(entry.date).slice(5) || "?"}: ${short(entry.choice, 60)}${entry.result ? ` (${short(entry.result, 40)})` : ""}`),
   ];
-  if (!list(memory.decisions).length) head.push("- none yet");
   const counts = {};
   for (const division of list(army?.divisions)) counts[division.template] = (counts[division.template] ?? 0) + 1;
-  const forces = Object.entries(counts).map(([template, count]) => `${count} ${templates[template]?.label ?? template}`).join(", ") || "none";
+  const forces = Object.entries(counts).map(([template, count]) => `${count} ${SHORT_UNITS[template] ?? templates[template]?.label ?? template}`).join(", ") || "none";
   const body = [
     "",
     `Date: ${date}.`,
-    `Forces: ${forces}; manpower ${Math.round(Number(army?.manpower?.available ?? 0)).toLocaleString("en-US")}.`,
+    `Forces: ${forces}; manpower ${thousands(army?.manpower?.available)}.`,
     ...normalizeFronts(fronts).filter((front) => key(front.owner) === key(polity)).map((front) => `Front against ${front.enemy}: ${front.posture}, ${front.divisionIds.length} divisions.`),
   ];
   return [...head, ...body].join("\n");
@@ -260,7 +273,12 @@ export const runLocalDecisions = async (world, { decide, map, seas = null, date 
   const hoi = world?.hoi ?? {};
   const templates = templatesFor(hoi.series);
   const started = now();
-  const countries = Object.keys(hoi.armies ?? {}).filter((polity) => !player || key(polity) !== key(player));
+  // Test G : 6 décisions sur 7 étaient « ne rien recruter » pour des pays en
+  // paix, 2 s chacune. Jev ne décide plus que pour les pays en guerre ; en paix,
+  // les règles du moteur (premier focus disponible, pas de recrutement).
+  const countries = Object.keys(hoi.armies ?? {})
+    .filter((polity) => !player || key(polity) !== key(player))
+    .filter((polity) => list(enemiesOf(polity)).length > 0);
   const context = {
     armies: hoi.armies, fronts: hoi.fronts, templates, map, seas, seaControl: hoi.seaControl,
     airMissions: hoi.airMissions, navalMissions: hoi.navalMissions, enemiesOf, atWar, date,

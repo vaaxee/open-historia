@@ -135,15 +135,24 @@ test("the sheet: programme, allies, grudges and recent decisions at its head (ca
     memory: { programme: "Recover the Baltic coast", decisions: [{ date: "1936-05-01", choice: "Attack toward Alytus", result: "took 1 state(s)" }] },
     allies: ["Mongolia"], grudges: ["Lithuania"], date: "1936-06-01", army: w.hoi.armies["Soviet Union"], fronts: w.hoi.fronts, templates: T36,
   });
-  assert.equal(sheet.split("\n").slice(0, 6).join("\n"), [
+  // Test G : une fiche plus courte (3 décisions, date MM-JJ, lignes bornées, forces en mots courts).
+  assert.equal(sheet.split("\n").slice(0, 5).join("\n"), [
     "You are Soviet Union.",
-    "Programme: Recover the Baltic coast.",
-    "Allies: Mongolia.",
-    "Grudges: Lithuania.",
+    "Programme: Recover the Baltic coast",
+    "Allies: Mongolia. Enemies: Lithuania.",
     "Recent decisions:",
-    "- 1936-05-01: Attack toward Alytus (took 1 state(s))",
+    "- 05-01: Attack toward Alytus (took 1 state(s))",
   ].join("\n"));
-  assert.match(sheet, /\nDate: 1936-06-01\.\nForces: 3 division d'infanterie, 1 escadre de chasse, 1 flotte; manpower 500,000\.\nFront against Lithuania: hold, 1 divisions\./);
+  assert.match(sheet, /\nDate: 1936-06-01\.\nForces: 3 infantry, 1 fighter wings, 1 fleets; manpower 500k\.\nFront against Lithuania: hold, 1 divisions\./);
+  const long = decisionSheet("Poland", {
+    memory: {
+      programme: "Stay independent between Germany and the Soviet Union: modernise the army, keep the French alliance, never yield",
+      decisions: ["a", "b", "c", "d", "e"].map((choice, index) => ({ date: `1936-01-0${index + 1}`, choice: `Choice ${choice}`, result: "no battle" })),
+    },
+  });
+  assert.match(long, /\nProgramme: Stay independent between Germany and the Soviet Union: modernise the army, keep…\n/);
+  assert.deepEqual(long.split("\n").filter((line) => line.startsWith("- ")), ["- 01-03: Choice c (no battle)", "- 01-04: Choice d (no battle)", "- 01-05: Choice e (no battle)"]);
+  assert.match(decisionSheet("Sweden", {}), /\nRecent decisions: none yet\n/);
 });
 
 test("a turn of decisions: countries at war first, the best option applied, at most 20, through setFrontDecider", async () => {
@@ -157,8 +166,7 @@ test("a turn of decisions: countries at war first, the best option applied, at m
     ["Soviet Union", "reserve", "Send 2 to the front against Lithuania"],
     ["Soviet Union", "air-sea", "Keep them at home"],
     ["Soviet Union", "recruit", "Raise one division d'infanterie"],
-    ["Sweden", "recruit", "Raise one division d'infanterie"],
-  ]);
+  ], "Sweden, at peace, is left to the engine's rules (test G)");
   assert.deepEqual(result.orders[0], { kind: "front", op: { op: "posture", polity: "Soviet Union", frontId: "f", posture: "attack", axis: "alytus" } });
   // The orders go through the same rules as everyone's.
   const { world: next } = applyFrontsForTurn(w, { map: map(w), seas, orders: result.orders, player: "" });
@@ -168,10 +176,10 @@ test("a turn of decisions: countries at war first, the best option applied, at m
   // The budget: the most important first.
   const one = await runLocalDecisions(w, { decide: async () => ({ best: 0, scores: [0] }), map: map(w), seas, enemiesOf, atWar: warOf, budget: 1 });
   assert.deepEqual(one.decisions.map((d) => d.questionId), ["front-f"]);
-  assert.equal(one.queued, 5);
-  // The player's country is never decided for.
+  assert.equal(one.queued, 4);
+  // The player's country is never decided for; nor is a country at peace.
   const player = await runLocalDecisions(w, { decide: async () => ({ best: 0 }), map: map(w), seas, enemiesOf, atWar: warOf, player: "Soviet Union" });
-  assert.deepEqual(player.decisions.map((d) => d.polity), ["Sweden"]);
+  assert.deepEqual(player.decisions.map((d) => d.polity), []);
   // A decider that fails stops the turn; the engine's rules take the rest.
   const failed = await runLocalDecisions(w, { decide: async () => { throw new Error("Jev answered 503"); }, map: map(w), seas, enemiesOf, atWar: warOf });
   assert.deepEqual([failed.decisions.length, failed.stopped], [0, "Jev answered 503"]);
@@ -241,6 +249,6 @@ test("the real Jev (llama-server on 8081): the card's example, and a military de
     decide: (polity, { sheet, question, options }) => client.score({ state: sheet, question, options }),
     map: map(w), seas, date: "1936-06-01", enemiesOf, atWar: warOf,
   });
-  assert.equal(result.decisions.length, 5);
+  assert.equal(result.decisions.length, 4, "the country at war only");
   t.diagnostic(`real Jev: ${result.decisions.length} decisions in ${result.ms} ms — ${result.decisions.map((d) => `${d.questionId}: ${d.choice} (${d.ms} ms)`).join("; ")}`);
 });
