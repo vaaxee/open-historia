@@ -58,6 +58,8 @@ export const COMBAT_TUNING = Object.freeze({
   // Un convoi de débarquement intercepté (la mer passée à l'ennemi) : part perdue.
   interceptedLoss: 0.1,
   dice: 0.15,
+  // Test G : le dé propre aux pertes de chaque camp (± 25 %).
+  lossDice: 0.25,
   // Rapport de forces à partir duquel l'état est pris, en dessous duquel l'attaque est repoussée.
   captureRatio: 1.3,
   repelRatio: 0.8,
@@ -99,6 +101,7 @@ const key = (value) => clean(value).normalize("NFD").toLowerCase().replace(/[^a-
 const list = (value) => (Array.isArray(value) ? value : []);
 const num = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 const round2 = (value) => Math.round(value * 100) / 100;
+const round4 = (value) => Math.round(value * 10000) / 10000;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 // Un tirage reproductible : la même graine, le même nombre dans [0, 1).
@@ -235,15 +238,25 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       // Les pertes suivent le rapport de forces : l'attaquant d'une résistance
       // écrasée ne perd presque rien (test G : 3 000 hommes contre une garnison
       // qui, elle, ne perdait personne), le défenseur écrasé perd l'essentiel.
+      // Test G (Rovno puis Varsovie) : l'attaquant perdait exactement 3 320 hommes
+      // à chaque fois. Le taux était arrondi à 0,01 : 0,007 et 0,012 donnaient le
+      // même 1 % de 332 000 hommes. Il est gardé fin (4 décimales) ; le terrain de
+      // l'état attaqué pèse aussi sur les pertes de l'attaquant, et chaque camp a
+      // son propre dé (± 25 %).
       const base = T.lossPerWeek * weeks;
-      const attackerLoss = round2(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.05, 3)
+      const lossDice = {
+        attacker: round2(1 + T.lossDice * (2 * seededRandom(`${seed}|${date}|${front.id}|${target}|attacker-losses`) - 1)),
+        defender: round2(1 + T.lossDice * (2 * seededRandom(`${seed}|${date}|${front.id}|${target}|defender-losses`) - 1)),
+      };
+      const attackerLoss = round4(clamp(base * clamp(1 / Math.max(ratio, 0.01), 0.05, 3) * factors.terrain * lossDice.attacker
         * (front.posture === "breakthrough" ? T.breakthroughLosses : 1) * (landing && result !== "captured" ? T.landingRepelLosses : 1), 0, 0.6));
-      const defenderLoss = round2(clamp(base * clamp(ratio, 0.3, 6) * (result === "captured" ? 1.5 : 1), 0, 0.8));
+      const defenderLoss = round4(clamp(base * clamp(ratio, 0.3, 6) * lossDice.defender * (result === "captured" ? 1.5 : 1), 0, 0.8));
+      factors.lossDice = lossDice;
       const menBefore = { attacker: 0, defender: 0 };
       for (const { division } of assigned) {
         menBefore.attacker += num(division.men);
         const entry = change(division.id);
-        entry.loss = round2(1 - (1 - entry.loss) * (1 - attackerLoss));
+        entry.loss = round4(1 - (1 - entry.loss) * (1 - attackerLoss));
         entry.organisation -= T.organisationLoss.attacker;
         entry.morale += result === "captured" ? T.moraleWin : result === "repelled" ? -T.moraleLoss : 0;
         entry.experience += T.experiencePerBattle;
@@ -259,7 +272,7 @@ export const resolveCombat = ({ world, map, atWar = () => false, sideOf = (polit
       for (const { division } of defenders) {
         menBefore.defender += num(division.men);
         const entry = change(division.id);
-        entry.loss = round2(1 - (1 - entry.loss) * (1 - defenderLoss));
+        entry.loss = round4(1 - (1 - entry.loss) * (1 - defenderLoss));
         entry.organisation -= T.organisationLoss.defender;
         entry.morale += result === "captured" ? -T.moraleLoss : result === "repelled" ? T.moraleWin : 0;
         entry.experience += T.experiencePerBattle;

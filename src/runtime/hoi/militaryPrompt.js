@@ -99,6 +99,7 @@ export const buildMilitaryPromptBlock = (world, polity, { others = 0, battles = 
     lines.push(
       "Battles of THIS period, already decided by the engine. Each has its own event in this turn, written by the engine: narrate around them,",
       "never change who won, the losses or who holds which state, and never add a capture of your own on a front the engine fights.",
+      "Never write your own event for one of these battles (no second version of it), and never announce territorial gains its sheet does not give.",
       describeBattles(battles),
     );
   }

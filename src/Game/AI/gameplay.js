@@ -107,6 +107,7 @@ import { checkUnitEntry, touchesSea, unitEntrySentence } from "../../runtime/wor
 import { detectLanguage, guardRefusedTerritory } from "./claimGuard.js";
 import { checkClaimHolder, describeClaimHolderFeedback, describeClaimHolderReceipt, isOwnClaim } from "./claimHolderCheck.js";
 import { misplacedFieldsHint } from "./misplacedFields.js";
+import { datesAfter, describeDuplicateBattle, duplicateBattleEvents, electionsNotHeld } from "./turnGuards.js";
 import { finishTurnProfile, lapClock, recordStep, startTurnProfile } from "../../runtime/turnProfile.js";
 import { describePrunedActors, pruneUnknownActors } from "./pregameActors.js";
 import { insertEventAt, ordersReversedBy, planPlayerWars, removeEventAt } from "./playerWarOrders.js";
@@ -6368,6 +6369,38 @@ const enforceWarSupport = (candidate, bundle, { receipt = null } = {}) => {
     return false;
   });
   if (kept.length !== records.length) candidate.warUpdates = kept;
+};
+
+// Test G : les élections que le moteur a tenues jusqu'ici (dernier changement de
+// chaque pays) et pendant cette période (resolvePoliticsForJump) : { polity, date }.
+const electionsHeldBy = (world, enginePolitics) => [
+  ...Object.entries(world?.hoi?.politics ?? {})
+    .filter(([, politics]) => normalizeString(politics?.lastChange?.kind) === "election")
+    .map(([polity, politics]) => ({ polity, date: normalizeString(politics.lastChange.date) })),
+  ...normalizeArray(enginePolitics?.changes).filter((change) => change?.kind === "election")
+    .map((change) => ({ polity: normalizeString(change.polity), date: normalizeString(change.date) })),
+];
+
+// Les fautes d'une réponse que les gardes du tour relèvent (turnGuards.js) :
+// [{ index, text }], une par événement.
+const turnGuardFaults = (candidate, { battles = [], elections = [], stopDate = "", world = {} } = {}) => {
+  const events = normalizeArray(candidate?.events);
+  const mentions = (text) => mentionedPolities(text, normalizeWorldState(world));
+  const placeNames = (battle) => [...new Set([normalizeString(battle?.stateName), placeNameFor(normalizeString(battle?.stateName), "fr"), placeNameFor(normalizeString(battle?.stateName), "en")].filter(Boolean))];
+  const faults = new Map();
+  for (const found of duplicateBattleEvents(events, battles, { mentions, placeNames })) {
+    faults.set(found.index, describeDuplicateBattle(found, normalizeString(events[found.index]?.title)));
+  }
+  for (const { index, polities } of electionsNotHeld(events, elections, { mentions })) {
+    if (faults.has(index)) continue;
+    faults.set(index, `"${normalizeString(events[index]?.title)}" tells the result of an election${polities.length ? ` in ${polities.join(", ")}` : ""} that the engine has not held. Elections are decided by the engine (their events are its own): never tell an election's result before it has happened.`);
+  }
+  events.forEach((event, index) => {
+    if (faults.has(index) || normalizeString(event?.source) === "engine") return;
+    const later = datesAfter(event, stopDate);
+    if (later.length) faults.set(index, `"${normalizeString(event?.title)}" tells as done something dated ${later.join(", ")}, after the end of this period (${stopDate}). Tell only what has happened by then.`);
+  });
+  return [...faults].map(([index, text]) => ({ index, text }));
 };
 
 // Phase 7.8 : une division embarquée (frontId « landing-… ») redevient libre.
@@ -13203,6 +13236,22 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             for (const { event, index, orders } of [...reversals].reverse()) {
               removeEventAt(candidate, index, EVENT_INDEX_DECODERS);
               noteReceipt(draft, "dropped", `Event "${normalizeString(event?.title)}" was removed: it undid the player's order "${orders[0]}". The AI never cancels, refuses or reverses a player's order; only the engine may refuse one, and it says so.`);
+            }
+          }
+          // Test G (29 janvier – 5 février) : une bataille du moteur racontée une
+          // seconde fois avec des gains, et une élection racontée avant d'avoir
+          // eu lieu (turnGuards.js). Renvoyé tant qu'une demande reste, retiré ensuite.
+          const guardFaults = turnGuardFaults(candidate, {
+            battles: normalizeArray(context.engineCombat?.battles),
+            elections: electionsHeldBy(bundle.world, context.enginePolitics),
+            stopDate: segmentTarget,
+            world: bundle.world,
+          });
+          if (guardFaults.length) {
+            if (strict) return guardFaults.map((fault) => `$.events: ${fault.text}`).join("\n");
+            for (const fault of [...guardFaults].sort((a, b) => b.index - a.index)) {
+              removeEventAt(candidate, fault.index, EVENT_INDEX_DECODERS);
+              noteReceipt(draft, "dropped", `Event removed — ${fault.text}`);
             }
           }
           // The map's tempo, an author's ceiling on how many regions change hands

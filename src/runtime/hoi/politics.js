@@ -87,6 +87,9 @@ export const POLITICS_PRESETS_1936 = Object.freeze({
   "Imperialist Japan": { ideology: "authoritarian", parties: { authoritarian: 55, fascist: 30, democratic: 12, communist: 3 }, stability: 60, warSupport: 55 },
   "Kuomintang China": { ideology: "authoritarian", parties: { authoritarian: 55, communist: 25, democratic: 12, fascist: 8 }, stability: 35, warSupport: 45 },
   Poland: { ideology: "authoritarian", parties: { authoritarian: 55, democratic: 30, fascist: 8, communist: 7 }, stability: 55, warSupport: 40 },
+  // Test G : la République espagnole, ses élections générales du 16 février 1936
+  // (tenues par le moteur ; l'IA ne peut plus les raconter avant).
+  Spain: { ideology: "democratic", parties: { democratic: 45, communist: 22, authoritarian: 20, fascist: 13 }, stability: 30, warSupport: 20, elections: { everyYears: 4, next: "1936-02-16" } },
 });
 
 // Phase 10 : le programme de départ des puissances de 1936 — ce que chacune
